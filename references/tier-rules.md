@@ -2,6 +2,7 @@
 
 fact-verify 스킬 Step 1에서 참조하는 출처 신뢰도 Tier 판정 기준.
 기본 목록은 과학기술정책(STI) 분야 기준 — 말미의 커스터마이즈 지침에 따라 자기 분야로 보강해 쓴다.
+한국 학술·정책 출처의 실재 확인 방법은 `korea-sources.md` 참조.
 
 ## Tier 1 — 정부·기관 공식
 
@@ -18,7 +19,8 @@ fact-verify 스킬 Step 1에서 참조하는 출처 신뢰도 Tier 판정 기준
 ### 명시적 Tier 1 기관 (예시)
 - 과학기술정보통신부 (msit.go.kr) · 기획재정부 (moef.go.kr)
 - 한국연구재단 (nrf.re.kr) · 정책브리핑 (korea.kr)
-- 국회 (assembly.go.kr) · 국회예산정책처 (nabo.go.kr)
+- 국회 (assembly.go.kr) · 국회예산정책처 (nabo.go.kr) · 국회입법조사처
+- 통계청 (kostat.go.kr) · e-나라지표 · KOSIS
 - NSF (nsf.gov) · NIH (nih.gov) · DARPA (darpa.mil)
 - UKRI (ukri.org) · JSPS (jsps.go.jp) · DFG (dfg.de)
 - OECD (oecd.org) · UN 계열 공식 기구
@@ -33,12 +35,13 @@ fact-verify 스킬 Step 1에서 참조하는 출처 신뢰도 Tier 판정 기준
 
 ### 국책연구기관 (예시)
 - KISTEP (kistep.re.kr) · KISTI (kisti.re.kr) · STEPI (stepi.re.kr)
-- 경제·인문사회연구회 소관 연구기관 간행물
+- 경제·인문사회연구회 소관 연구기관 간행물 (KDI·KIEP·KIPF 등)
+- 국책연 보고서는 **NKIS**(nkis.re.kr)·기관 사이트에서 실재 확인 (korea-sources.md)
 
 ### Peer-reviewed 학술지
 - Nature, Science, Cell 등 종합 top-tier
-- Research Policy, Technovation 등 분야 전문지
-- KCI 등재 국내 학회지
+- Research Policy, Technovation, Scientometrics 등 분야 전문지
+- **KCI 등재/등재후보 국내 학회지** — 실재·서지 확인은 KCI로 (korea-sources.md)
 
 ### 싱크탱크
 - Brookings (brookings.edu) · RAND (rand.org) · CSIS (csis.org)
@@ -47,6 +50,7 @@ fact-verify 스킬 Step 1에서 참조하는 출처 신뢰도 Tier 판정 기준
 - 단독 근거로 사용 가능 (전문 판단 영역)
 - peer-review 여부 확인 권장. 프리프린트(arXiv 등)는 "미심사" 표기를 병기
 - 워킹페이퍼·이슈페이퍼는 기관 공식 간행물인지 확인
+- **국문 문헌은 국제 DB에 안 잡혀도 실재할 수 있다** — KCI·RISS·국회도서관으로 교차 확인 후 판정
 
 ---
 
@@ -55,7 +59,7 @@ fact-verify 스킬 Step 1에서 참조하는 출처 신뢰도 Tier 판정 기준
 ### 국내
 - 종합일간지: 조선 (chosun.com) · 중앙 (joongang.co.kr) · 동아 (donga.com) · 한겨레 (hani.co.kr) · 경향 (khan.co.kr)
 - 경제지: 매일경제 (mk.co.kr) · 한국경제 (hankyung.com) · 서울경제 (sedaily.com)
-- 과학·기술 전문: 동아사이언스 (dongascience.com) · 전자신문 (etnews.com)
+- 과학·기술 전문: 동아사이언스 (dongascience.com) · 전자신문 (etnews.com) · HelloDD (hellodd.com)
 - 통신사: 연합뉴스 (yna.co.kr)
 
 ### 해외
@@ -77,6 +81,7 @@ fact-verify 스킬 Step 1에서 참조하는 출처 신뢰도 Tier 판정 기준
 - 커뮤니티 (Reddit, 네이버카페, 디시인사이드 등)
 - 개인 유튜브 채널, 뉴스레터
 - 익명·출처 불명 자료
+- 위키백과 (출처 추적의 시작점일 뿐, 그 자체로 근거 불가)
 
 ### 규칙
 - **단독 근거 절대 불가**
