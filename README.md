@@ -37,7 +37,7 @@ AI 리서치의 대표적 실패는 **그럴듯한 출처 조작**입니다:
 ```bash
 mkdir -p ~/.claude/skills
 cd ~/.claude/skills
-git clone https://github.com/parkjui92-tech/fact-verify.git
+git clone https://github.com/parkjui92/fact-verify.git
 ```
 
 설치 후 Claude Code를 재시작하면 자동으로 인식됩니다.
@@ -91,7 +91,7 @@ export DATA_GO_KR_KEY="발급받은_인증키"
 ## 연구자용 스킬 시리즈
 
 - **fact-verify** (이 저장소) — 출처 신뢰도 검증 게이트 (한국 학술·정책 문헌 포함)
-- **[paper-proofread](https://github.com/parkjui92-tech/paper-proofread)** — 한국어 학술 원고 교정교열 (본문↔참고문헌 대조·서지 실재 검증 포함)
+- **[paper-proofread](https://github.com/parkjui92/paper-proofread)** — 한국어 학술 원고 교정교열 (본문↔참고문헌 대조·서지 실재 검증 포함)
 
 ## 라이선스
 
