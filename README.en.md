@@ -1,6 +1,6 @@
 # fact-verify
 
-[![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.2.0-blue.svg)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 ![Claude Code](https://img.shields.io/badge/Claude_Code-Skill-purple.svg)
 
@@ -18,6 +18,8 @@ Ask an AI to do your research and it hands back a tidy list of sources. The trou
 | Three outlets reporting the same thing — reassuring, until you notice all three ran one press release | Groups the copies together and recounts them as **one independent source, not three** |
 | A blog post quoted as if it were a government statistic | **Sorts sources into four levels by how far you can rely on them.** The lowest level never counts as evidence on its own; the skill traces it back to the original |
 | A perfectly real Korean paper or institute report written off as "source unknown" | Looks Korean material up separately in **KCI, RISS, the National Assembly Library, and NKIS** |
+| A sentence whose headline number is right but which drags along unverified derivatives — an article number, a total split in half | Breaks the sentence apart and checks **each figure separately** — N figures in one sentence means N checks |
+| A government site that blocks automated access, so a real source returns 404 | Doesn't declare the link dead; confirms it via search indexes and alternate official routes, and labels it honestly as **"blocked — index-confirmed"** |
 
 That last row is the thing international tools can't do for you. Those four are Korea's own catalogues — the national index of scholarly journals, the shared catalogue of university libraries, the parliamentary library, and the portal for government-funded research institutes. Korean journal articles, institute reports, and official publications often carry no DOI at all, so CrossRef, arXiv and Semantic Scholar index almost none of them. Point an international verification tool at them and a genuine article in *Korean Policy Studies Review*, or a real KISTEP issue paper, comes back "not found" — meaning **a source that exists gets written off as something the AI made up.** Deleting a real source is as damaging as letting a fake one through.
 
