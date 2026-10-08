@@ -64,7 +64,7 @@ You get one row per item, like this.
 
 | # | The claim | Source | Level | Verdict | Why, and what to do |
 |---|---|---|---|---|---|
-| 1 | New architecture doubles performance | arXiv 2404.99999 | 2 | ❌ | No paper carries that ID — remove it or find a real one |
+| 1 | New architecture doubles performance | arXiv 2404.99999 | 2 | ⚠️ | Identifier lookup failed — check the ID and alternative full text |
 | 2 | Industry investment surging | 2 business-daily articles | 3 | ⚠️ | Both ran the same press release — one independent source, not two |
 | 3 | Innovation cluster effects | *Korean Policy Studies Review* 32(1) | 2 | ✅ | Confirmed in KCI (cited year is wrong: 2022 should be 2021) |
 
