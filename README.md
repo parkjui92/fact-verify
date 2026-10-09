@@ -88,7 +88,7 @@ Claude Code를 껐다 켜면 알아서 인식합니다.
 
 ## 함께 만든 것들
 
-**보고서·제안서를 써 주는 플러그인** — [policy-research-kit](https://github.com/parkjui92/policy-research-kit) (정책연구보고서) · [rnd-proposal-kit](https://github.com/parkjui92/rnd-proposal-kit) (정부 R&D 제안서) · [socsci-paper-kit](https://github.com/parkjui92/socsci-paper-kit) (사회과학 논문)
+**보고서·제안서를 써 주는 플러그인** — [policy-research-kit](https://github.com/parkjui92/policy-research-kit) (정책연구보고서) · rnd-proposal-kit (정부 R&D 제안서, 비공개) · [socsci-paper-kit](https://github.com/parkjui92/socsci-paper-kit) (사회과학 논문)
 
 **만들고 고치는 플러그인** — [lecture-deck-kit](https://github.com/parkjui92/lecture-deck-kit) (강의자료 HTML 덱 · 브라우저에서 바로 수정)
 
