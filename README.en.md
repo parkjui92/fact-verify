@@ -1,6 +1,6 @@
 # fact-verify
 
-[![Version](https://img.shields.io/badge/version-1.1.0-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.3.0-blue.svg)](CHANGELOG.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 ![Claude Code](https://img.shields.io/badge/Claude_Code-Skill-purple.svg)
 
@@ -18,6 +18,10 @@ Ask an AI to do your research and it hands back a tidy list of sources. The trou
 | Three outlets reporting the same thing — reassuring, until you notice all three ran one press release | Groups the copies together and recounts them as **one independent source, not three** |
 | A blog post quoted as if it were a government statistic | **Sorts sources into four levels by how far you can rely on them.** The lowest level never counts as evidence on its own; the skill traces it back to the original |
 | A perfectly real Korean paper or institute report written off as "source unknown" | Looks Korean material up separately in **KCI, RISS, the National Assembly Library, and NKIS** |
+| A figure that is in the source, with a figure that isn't riding along in the same sentence | Splits the sentence and **checks every number on its own.** Three numbers means three checks |
+| The checking AI wrote "confirmed against the original," but the passage isn't actually in it | Saves the fetched text and **mechanically checks that the quoted excerpt is really in there** |
+| A government site blocks automated access, returns 404 or 403, and a real source gets written off as fake | **Records "couldn't reach it" separately from "it's wrong."** Blocked sites get checked through another copy of the original |
+| After editing a draft, you either re-check everything or re-check nothing | Compares the edited draft with the last one and **sends back only the sentences that changed** |
 
 That last row is the thing international tools can't do for you. Those four are Korea's own catalogues — the national index of scholarly journals, the shared catalogue of university libraries, the parliamentary library, and the portal for government-funded research institutes. Korean journal articles, institute reports, and official publications often carry no DOI at all, so CrossRef, arXiv and Semantic Scholar index almost none of them. Point an international verification tool at them and a genuine article in *Korean Policy Studies Review*, or a real KISTEP issue paper, comes back "not found" — meaning **a source that exists gets written off as something the AI made up.** Deleting a real source is as damaging as letting a fake one through.
 
@@ -26,8 +30,10 @@ That last row is the thing international tools can't do for you. Those four are 
 ## How it runs
 
 ```
-① sort sources into four levels → ② group the ones tracing back to the same origin → ③ open them to see if they exist
+① sort sources into four levels → ② group the ones tracing back to the same origin → ③ open them to see if they exist → ④ machine-check that every verdict followed the rules
 ```
+
+Step ④ is new in v1.3. Verdicts go into a ledger file (`draft.fv.json`), and the bundled script `scripts/fv.py` audits it. If a number was never checked, if an excerpt can't be found in the saved source, or if something was marked "take it out" only because the site couldn't be reached, no report is produced. The script uses only the Python standard library — nothing to install. → [Ledger guide (Korean)](references/ledger.md)
 
 The default stance is doubt: something has to be confirmed before it passes. Every item comes back marked ✅ verified · ⚠️ couldn't confirm (**which means "not checked," not "wrong"**) · ❌ take it out · 🚫 no source at all — along with **why it was marked that way and what to do about it.** Whatever doesn't pass is also gathered into a **request to go re-research it**, which you can hand straight to whoever did the research.
 
@@ -53,6 +59,7 @@ Just ask in plain language. The note on the right is how deep to look.
 Here's this week's briefing draft. Check the sources.        ← standard (the default)
 Are the references in this manuscript real? Many are Korean. ← Korean-language check
 This report is going out externally — verify it at deep.     ← figures and dates against originals
+I edited the draft you checked. Re-check only what changed.   ← changed sentences only
 I'm offline. Just the source levels and the ID formats.      ← quick (no internet needed)
 ```
 
@@ -68,14 +75,15 @@ You get one row per item, like this.
 | 2 | Industry investment surging | 2 business-daily articles | 3 | ⚠️ | Both ran the same press release — one independent source, not two |
 | 3 | Innovation cluster effects | *Korean Policy Studies Review* 32(1) | 2 | ✅ | Confirmed in KCI (cited year is wrong: 2022 should be 2021) |
 
-A summary sits above the table: how many items were checked, how many landed on each verdict, how the levels are distributed, and at what depth and when.
+A summary sits above the table: how many items were checked, how many landed on each verdict, how the levels and access results are distributed, and at what depth and when. Those counts are computed from the ledger by the script, not tallied by a person or an AI.
 
 ## Good to know
 
 - **It needs internet.** Offline you only get `quick`. And when a full text sits behind a paywall (DBpia and the like) and can't be opened, the item is held at ⚠️ — **never declared wrong.**
 - **It checks sources; it doesn't rule on whether a claim is true.** It confirms that a source exists and supports what's attached to it, but it doesn't certify that the claim itself is scholarly sound. The last call is a person's.
 - **The AI doing the checking comes from the same family** as the one that produced the material. A checkpoint reduces errors; it doesn't remove them.
-- The only things that leave your machine are **the links, IDs, and search terms (title, author) being checked.** The document itself is never sent to an outside service.
+- The only things that leave your machine are **the links, IDs, and search terms (title, author) being checked.** The document itself is never sent to an outside service. The script identifies itself as `fact-verify` when it connects and never tries to get around bot blocking.
+- **The script picks out sentences with numbers, dates, direct quotes, or statute articles.** A factual claim with none of those ("the program was abolished") has to be added by whoever is checking. The excerpt check only confirms the characters match; whether that excerpt actually supports the claim is still the checker's call.
 - The default source levels are written for **science and technology policy.** If you work in another field, add its agencies and journals to [references/tier-rules.md](references/tier-rules.md).
 
 ## Related work

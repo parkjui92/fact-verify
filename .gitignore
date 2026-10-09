@@ -1,2 +1,4 @@
 .DS_Store
 proofread_work/
+__pycache__/
+*.pyc

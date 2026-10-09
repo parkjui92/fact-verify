@@ -1,0 +1,433 @@
+{
+ "schema": "fact-verify/ledger@1",
+ "tool": "fv.py 1.3.0",
+ "document": {
+  "path": "examples/ledger-demo/draft.md",
+  "sha256": "84a1a72af0e4d5d2c4064117b724f8e367ddc083d808f575e4601628c0dc9cd8",
+  "extracted_at": "2026-10-10T00:32:24"
+ },
+ "depth": "standard",
+ "sources": {
+  "S01": {
+   "kind": "url",
+   "ref": "https://www.example.go.kr/press/2026-ai-chip",
+   "tier": 1,
+   "chain": null,
+   "access_status": "FULL_TEXT",
+   "http_status": 200,
+   "final_url": null,
+   "title": null,
+   "text_file": "fv_sources/S01.txt",
+   "text_chars": null,
+   "meta": {},
+   "note": "",
+   "format_issue": null,
+   "alt_for": null
+  },
+  "S02": {
+   "kind": "url",
+   "ref": "https://www.example.re.kr/news/interview-2026",
+   "tier": 2,
+   "chain": null,
+   "access_status": "NOT_FOUND",
+   "http_status": 404,
+   "final_url": null,
+   "title": null,
+   "text_file": null,
+   "text_chars": null,
+   "meta": {},
+   "note": "HTTP 404 — 기사 주소가 옮겨짐",
+   "format_issue": null,
+   "alt_for": null
+  },
+  "S03": {
+   "kind": "url",
+   "ref": "https://news-a.example.com/2026/invest",
+   "tier": 3,
+   "chain": "협회 보도자료 2026-03",
+   "access_status": "FULL_TEXT",
+   "http_status": null,
+   "final_url": null,
+   "title": null,
+   "text_file": "fv_sources/S03.txt",
+   "text_chars": null,
+   "meta": {},
+   "note": "",
+   "format_issue": null,
+   "alt_for": null
+  },
+  "S04": {
+   "kind": "url",
+   "ref": "https://news-b.example.com/2026/invest",
+   "tier": 3,
+   "chain": "협회 보도자료 2026-03",
+   "access_status": "FULL_TEXT",
+   "http_status": null,
+   "final_url": null,
+   "title": null,
+   "text_file": "fv_sources/S04.txt",
+   "text_chars": null,
+   "meta": {},
+   "note": "",
+   "format_issue": null,
+   "alt_for": null
+  },
+  "S05": {
+   "kind": "url",
+   "ref": "https://law.example.go.kr/act/12",
+   "tier": 1,
+   "chain": null,
+   "access_status": "BLOCKED",
+   "http_status": 403,
+   "final_url": null,
+   "title": null,
+   "text_file": null,
+   "text_chars": null,
+   "meta": {},
+   "note": "HTTP 403 — 자동 접속 차단",
+   "format_issue": null,
+   "alt_for": null
+  },
+  "S06": {
+   "kind": "bib",
+   "ref": "김민수 (2021). 혁신클러스터 참여와 기업 성과. 「한국정책학회보」, 30(3), 1-25.",
+   "tier": 2,
+   "chain": null,
+   "access_status": "METADATA_ONLY",
+   "http_status": null,
+   "final_url": null,
+   "title": null,
+   "text_file": null,
+   "text_chars": null,
+   "meta": {},
+   "note": "KCI 서지 확인 — 30(3), 2021",
+   "format_issue": null,
+   "alt_for": null
+  },
+  "S07": {
+   "kind": "url",
+   "ref": "https://www.example.re.kr/press/2026-0312",
+   "tier": 2,
+   "chain": null,
+   "access_status": "FULL_TEXT",
+   "http_status": 200,
+   "final_url": null,
+   "title": "기관 보도자료",
+   "text_file": "fv_sources/S07.txt",
+   "text_chars": null,
+   "meta": {},
+   "note": "S02의 대체 원문",
+   "format_issue": null,
+   "alt_for": "S02"
+  },
+  "S08": {
+   "kind": "note",
+   "ref": "김민수(2021) 초록",
+   "tier": 2,
+   "chain": null,
+   "access_status": "FULL_TEXT",
+   "http_status": null,
+   "final_url": null,
+   "title": null,
+   "text_file": "fv_sources/S08.txt",
+   "text_chars": null,
+   "meta": {},
+   "note": "S06의 본문(초록)",
+   "format_issue": null,
+   "alt_for": "S06"
+  }
+ },
+ "claims": [
+  {
+   "id": "C001",
+   "line": 3,
+   "unit": "text",
+   "sentence": "- 정부는 2026년 AI 반도체 예산을 1조 2,000억 원으로 확정했다[^1].",
+   "sentence_hash": "c5bc21dbfcf5",
+   "atoms": [
+    {
+     "type": "year",
+     "text": "2026년",
+     "id": "C001.a1"
+    },
+    {
+     "type": "number",
+     "text": "1조 2,000억 원",
+     "id": "C001.a2"
+    }
+   ],
+   "sources": [
+    "S01"
+   ],
+   "checks": [
+    {
+     "atom": "C001.a1",
+     "source": "S01",
+     "evidence_status": "SUPPORTS",
+     "origin": "literal",
+     "excerpt": "2026년도 AI 반도체 예산",
+     "locator": "보도자료 1문단"
+    },
+    {
+     "atom": "C001.a2",
+     "source": "S01",
+     "evidence_status": "SUPPORTS",
+     "origin": "literal",
+     "excerpt": "1조 2,000억 원으로 확정",
+     "locator": "보도자료 1문단"
+    }
+   ],
+   "verdict": "VERIFIED",
+   "reason": "",
+   "action": "",
+   "no_source_candidate": false
+  },
+  {
+   "id": "C002",
+   "line": 4,
+   "unit": "text",
+   "sentence": "- 이 가운데 인력 양성에 3,000억 원이 배정되어 나머지 9,000억 원이 기술개발에 쓰인다[^1].",
+   "sentence_hash": "aa77e1b550af",
+   "atoms": [
+    {
+     "type": "number",
+     "text": "3,000억 원",
+     "id": "C002.a1"
+    },
+    {
+     "type": "number",
+     "text": "9,000억 원",
+     "id": "C002.a2"
+    }
+   ],
+   "sources": [
+    "S01"
+   ],
+   "checks": [
+    {
+     "atom": "C002.a1",
+     "source": "S01",
+     "evidence_status": "SUPPORTS",
+     "origin": "literal",
+     "excerpt": "3,000억 원은 인력 양성에 배정",
+     "locator": "보도자료 2문장"
+    },
+    {
+     "atom": "C002.a2",
+     "source": "S01",
+     "evidence_status": "INSUFFICIENT",
+     "origin": "derived",
+     "excerpt": "나머지는 인프라 구축과 기술개발에 나누어 투입",
+     "locator": "보도자료 2문장",
+     "formula": "1조 2,000억 − 3,000억"
+    }
+   ],
+   "verdict": "NEEDS_REVIEW",
+   "reason": "9,000억 원은 원문에 없는 역산치이고, 원문은 나머지를 인프라와 기술개발에 나눈다고만 함(⑧·①)",
+   "action": "'나머지 9,000억 원은 인프라 구축과 기술개발에 투입'으로 고치거나 수치 삭제",
+   "no_source_candidate": false
+  },
+  {
+   "id": "C003",
+   "line": 5,
+   "unit": "text",
+   "sentence": "- 같은 발표에서 국내 AI 기업 수는 2,500개로 집계됐다[^1].",
+   "sentence_hash": "94b9f34d33bd",
+   "atoms": [
+    {
+     "type": "number",
+     "text": "2,500개",
+     "id": "C003.a1"
+    }
+   ],
+   "sources": [
+    "S01"
+   ],
+   "checks": [
+    {
+     "atom": "C003.a1",
+     "source": "S01",
+     "evidence_status": "CONTRADICTS",
+     "origin": "literal",
+     "excerpt": "현재 국내 AI 기업은 1,250개로 집계된다",
+     "locator": "보도자료 3문장"
+    }
+   ],
+   "verdict": "REJECT",
+   "reason": "원문은 1,250개 — 본문 2,500개와 다름",
+   "action": "1,250개로 정정",
+   "no_source_candidate": false
+  },
+  {
+   "id": "C004",
+   "line": 6,
+   "unit": "text",
+   "sentence": "- 연구소장은 \"실패는 미리 정한 기준으로만 판단한다\"고 말했다[^2].",
+   "sentence_hash": "058045ccd1a1",
+   "atoms": [
+    {
+     "type": "quote",
+     "text": "실패는 미리 정한 기준으로만 판단한다",
+     "id": "C004.a1"
+    }
+   ],
+   "sources": [
+    "S02"
+   ],
+   "checks": [
+    {
+     "atom": "C004.a1",
+     "source": "S07",
+     "evidence_status": "INSUFFICIENT",
+     "origin": "paraphrase",
+     "excerpt": "실패 여부는 사전에 정한 중단 기준에 따라 판단한다",
+     "locator": "기관 보도자료"
+    }
+   ],
+   "verdict": "NEEDS_REVIEW",
+   "reason": "원래 기사 링크는 404. 대체 원문(기관 보도자료)에서 취지는 같으나 문구가 다름(⑥)",
+   "action": "따옴표를 벗겨 간접 인용으로 바꾸고 출처를 기관 보도자료로 교체",
+   "no_source_candidate": false
+  },
+  {
+   "id": "C005",
+   "line": 7,
+   "unit": "text",
+   "sentence": "- 업계 투자는 전년 대비 40% 늘었다[^3][^4].",
+   "sentence_hash": "17d164bad931",
+   "atoms": [
+    {
+     "type": "number",
+     "text": "40%",
+     "id": "C005.a1"
+    }
+   ],
+   "sources": [
+    "S03",
+    "S04"
+   ],
+   "checks": [
+    {
+     "atom": "C005.a1",
+     "source": "S03",
+     "evidence_status": "SUPPORTS",
+     "origin": "literal",
+     "excerpt": "업계 투자는 전년 대비 40% 늘었다",
+     "locator": "기사 1문단"
+    },
+    {
+     "atom": "C005.a1",
+     "source": "S04",
+     "evidence_status": "SUPPORTS",
+     "origin": "literal",
+     "excerpt": "전년 대비 40% 증가했다",
+     "locator": "기사 1문단"
+    }
+   ],
+   "verdict": "NEEDS_REVIEW",
+   "reason": "두 기사 모두 같은 협회 보도자료를 받아씀 — 독립 출처 1개",
+   "action": "협회 보도자료 원문으로 출처를 교체",
+   "no_source_candidate": false
+  },
+  {
+   "id": "C006",
+   "line": 8,
+   "unit": "text",
+   "sentence": "- 개정안은 제12조에 따라 2027년 3월 1일부터 시행된다[^5].",
+   "sentence_hash": "b44a4092a18b",
+   "atoms": [
+    {
+     "type": "law",
+     "text": "제12조",
+     "id": "C006.a1"
+    },
+    {
+     "type": "date",
+     "text": "2027년 3월 1일",
+     "id": "C006.a2"
+    }
+   ],
+   "sources": [
+    "S05"
+   ],
+   "checks": [
+    {
+     "atom": "C006.a1",
+     "source": "S05",
+     "evidence_status": "NOT_CHECKED",
+     "origin": "literal",
+     "excerpt": "",
+     "locator": ""
+    },
+    {
+     "atom": "C006.a2",
+     "source": "S05",
+     "evidence_status": "NOT_CHECKED",
+     "origin": "literal",
+     "excerpt": "",
+     "locator": ""
+    }
+   ],
+   "verdict": "NEEDS_REVIEW",
+   "reason": "법령 사이트가 자동 접속을 막음(403) — 틀렸다는 뜻이 아님",
+   "action": "국가법령정보센터 원문에서 조문 번호와 시행일을 직접 확인",
+   "no_source_candidate": false
+  },
+  {
+   "id": "C007",
+   "line": 9,
+   "unit": "text",
+   "sentence": "- 클러스터 참여 기업의 특허 출원이 비참여 기업보다 1.4배 많았다(김민수, 2021).",
+   "sentence_hash": "8ef05347c9ae",
+   "atoms": [
+    {
+     "type": "number",
+     "text": "1.4배",
+     "id": "C007.a1"
+    }
+   ],
+   "sources": [
+    "S06",
+    "S08"
+   ],
+   "checks": [
+    {
+     "atom": "C007.a1",
+     "source": "S08",
+     "evidence_status": "SUPPORTS",
+     "origin": "literal",
+     "excerpt": "특허 출원이 비참여 기업보다 1.4배 많았다",
+     "locator": "초록"
+    }
+   ],
+   "verdict": "VERIFIED",
+   "reason": "",
+   "action": "",
+   "no_source_candidate": false
+  },
+  {
+   "id": "C008",
+   "line": 10,
+   "unit": "text",
+   "sentence": "- 업계 관계자에 따르면 연내 규제 3건이 완화된다.",
+   "sentence_hash": "baa89746a1c5",
+   "atoms": [
+    {
+     "type": "number",
+     "text": "3건",
+     "id": "C008.a1"
+    }
+   ],
+   "sources": [],
+   "checks": [],
+   "verdict": "NO_SOURCE",
+   "reason": "출처 없는 전망",
+   "action": "출처를 찾지 못하면 문장 삭제",
+   "no_source_candidate": true
+  }
+ ],
+ "orphans": {
+  "cites_without_reference": [],
+  "references_never_cited": []
+ }
+}
