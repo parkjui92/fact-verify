@@ -33,7 +33,7 @@ import urllib.request
 import zipfile
 from xml.etree import ElementTree as ET
 
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 SCHEMA = "fact-verify/ledger@1"
 
 VERDICTS = ("PENDING", "VERIFIED", "NEEDS_REVIEW", "REJECT", "NO_SOURCE", "OUT_OF_SCOPE")
@@ -267,7 +267,7 @@ def _strip_cites(s):
 
 
 def atoms_of(sentence):
-    s = LIST_MARK.sub("", _strip_cites(sentence))
+    s = LIST_MARK.sub("", _strip_cites(re.sub(r"<[^>]+>", " ", sentence)))
     s = TIME_RE.sub(lambda m: " " * len(m.group(0)), s)
     s = re.sub(r"\*\*|__|`", "", s)
     found, taken = [], []
@@ -403,6 +403,8 @@ def extract(text, path=None):
             continue
         for s in sentences(line):
             units.append((i, s, "text"))
+        if URL_RE.search(line) or FN_REF.search(line):
+            units.append((i, line, "line_cites"))
 
     ledger = {"schema": SCHEMA, "tool": "fv.py " + VERSION,
               "document": {"path": path, "sha256": hashlib.sha256(
@@ -431,6 +433,14 @@ def extract(text, path=None):
         if kind == "heading":
             section_start = len(ledger["claims"])
             continue
+        if kind == "line_cites":
+            got = [add_source(k, v) for k, v in cites_of(s) if k in ("url", "doi", "arxiv", "isbn")]
+            for c in ledger["claims"]:
+                if c["line"] == line_no and not c["sources"] and got:
+                    c["sources"] = list(got)
+                    c["no_source_candidate"] = False
+                    c["source_line"] = line_no
+            continue
         if kind == "source_line":
             got = [add_source(k, v) for k, v in cites_of(s) if k in ("url", "doi", "arxiv", "isbn")]
             if not got:
@@ -445,6 +455,10 @@ def extract(text, path=None):
         raw_cites = cites_of(s)
         if not atoms and not raw_cites:
             continue
+        if not atoms:
+            bare = URL_RE.sub("", re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", s))
+            if len(re.sub(r"[\W_]", "", LIST_MARK.sub("", bare))) < 12:
+                continue                              # "→ [기록](링크)" 같은 근거 링크 줄은 주장이 아님
         cites = []
         for k, v in raw_cites:
             if k == "footnote":
@@ -1339,7 +1353,12 @@ def selftest():
     led["claims"][0]["checks"].append(dict(good, atom="C1.a2", source="S04", excerpt="30%"))
     ok(must(led), "발언자 본인 채널이어도 수치 사실은 원출처 필요")
 
-    total = 52
+    led = extract('<img src="a.png" width="100%" alt="그림 설명 문장입니다">\n')
+    ok(led["claims"] == [], "HTML 태그 속성은 항목이 아님")
+    led = extract("- 링크 14개를 대조했습니다. 오류는 2건이었습니다. → [기록](https://ex.org/r)\n")
+    ok(len(led["claims"]) == 2 and all(c["sources"] for c in led["claims"]), "같은 줄 끝의 근거 링크를 앞 문장에도")
+
+    total = 54
     print("자체 점검 %d/%d 통과" % (total - len(fails), total))
     for f in fails:
         print("  실패: " + f)
