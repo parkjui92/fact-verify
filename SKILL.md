@@ -116,6 +116,7 @@ CrossRef·arXiv·Semantic Scholar 같은 국제 DB는 **국문 학술지·국책
 ### R1. 자동조회 차단 사이트 대응 — "404/403이 곧 허위 출처는 아니다"
 정부·기관 사이트 다수가 봇을 차단한다(실측: energy.gov 404, iaea.org 402, science.org 403, ukri.org 404, moore.org 404, nature.com 로그인벽, nsfc.gov.cn SSL 오류, hbr.org 제한). 또한 **HTTP 200이어도 JS 렌더링 페이지는 본문 추출이 실패**할 수 있다(실측: arpa-e.energy.gov — 내비게이션만 반환). 절차:
 1. fetch 실패·빈 본문 → 즉시 REJECT 금지. **검색엔진 색인·캐시로 해당 문구를 확인**하고, 확인되면 판정을 `NEEDS_REVIEW(차단-색인확인)`으로 세분 표기한다.
+1-b. **차단·빈 본문이면 묻지 않고 내장 브라우저(aside)로 연다.** `probe`가 BLOCKED·EMPTY_BODY·UNREACHABLE을 돌려주면 사용자에게 보고하기 전에 Claude 내장 브라우저(`mcp__Claude_Browser__navigate` → `get_page_text`)로 같은 URL을 열어 본문을 받고, `fv_sources/Sxx.txt`에 첫 줄 `# browser(aside) capture <날짜> — <URL>` 머리말로 저장한 뒤 `access_status`를 FULL_TEXT·note `browser(aside)`로 올린다(발췌 기계 대조가 되게). PDF 링크는 `pypdf`로 텍스트를 뽑아 같은 방식으로 저장한다. **Cloudflare 봇 확인창·CAPTCHA·로그인벽이 뜨면 거기서 멈춘다**(우회·체크 금지) — 그때만 BLOCKED로 남기고 대체 경로(2.)로 간다. 유료벽은 노출된 제목·날짜·부제까지만 저장하고 본문 미대조로 적는다. 실측(2026-10-12 해외 사례 메모): 403 3건+JS 빈 본문 1건 중 4건을 이 경로로 확보, anl.gov만 봇 확인창.
 2. 대체 경로를 시도한다: 같은 기관의 다른 URL(보도자료·PDF 직링크·간행물 페이지), 공식 배포 채널(EurekAlert=기관 보도자료 배포, grants.gov=연방 공고 원문, CORDIS=EU 과제 공식), 신뢰 가능한 재게시(동일 원문을 재게시한 여러 대학은 독립 출처 한 계통으로 계산).
 3. 원문 직접 대조·색인만 확인·2차 자료 확인을 검증 기록에서 구분한다. 본문에는 필요한 출처와 실질적 불확실성을 남기며, 내부 검증 배지의 표시 여부는 사용자의 배포 형식을 따른다.
 

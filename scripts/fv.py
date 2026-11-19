@@ -539,7 +539,26 @@ def _ctx():
         return ssl.create_default_context()
 
 
+def _iri_to_uri(url):
+    """한글 등 비ASCII가 든 주소(IRI)를 urllib이 받는 URI로 — 경로·질의만 퍼센트 인코딩, 호스트는 IDNA."""
+    if all(ord(c) < 128 for c in url):
+        return url
+    try:
+        sp = urllib.parse.urlsplit(url)
+        host = sp.hostname.encode("idna").decode("ascii") if sp.hostname else ""
+        netloc = host + (":%d" % sp.port if sp.port else "")
+        if sp.username:
+            netloc = sp.username + ("@" if not sp.password else ":" + sp.password + "@") + netloc
+        return urllib.parse.urlunsplit((sp.scheme, netloc,
+                                        urllib.parse.quote(sp.path, safe="/%:@!$&'()*+,;="),
+                                        urllib.parse.quote(sp.query, safe="=&%:@!$'()*+,;/?"),
+                                        urllib.parse.quote(sp.fragment, safe="%:@!$&'()*+,;=/?")))
+    except Exception:
+        return url
+
+
 def fetch(url, timeout=15, accept=None, limit=6_000_000):
+    url = _iri_to_uri(url)
     req = urllib.request.Request(url, headers={
         "User-Agent": UA, "Accept": accept or "text/html,application/xhtml+xml,application/pdf;q=0.9,*/*;q=0.8",
         "Accept-Language": "ko,en;q=0.8"})
