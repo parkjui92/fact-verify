@@ -9,6 +9,7 @@
 ```bash
 python3 scripts/fv.py extract 원고.md            # 원고.fv.json 생성 (hwpx·docx·html·txt도 됨)
 python3 scripts/fv.py probe 원고.fv.json          # 링크·DOI·arXiv 접속 상태 기록, 본문은 fv_sources/에 저장
+python3 scripts/fv.py lookup 원고.fv.json         # DOI 없는 참고문헌을 Crossref로 찾아 연도·권호·철회 대조
 #   … 검증자가 원장의 sources(tier·chain)와 claims(checks·verdict)를 채운다 …
 python3 scripts/fv.py check 원고.fv.json --final  # exit 1 = [필수] 위반
 python3 scripts/fv.py report 원고.fv.json -o 원고_검증보고서.md
@@ -21,6 +22,7 @@ python3 scripts/fv.py selftest
 |---|---|---|
 | extract | 문장을 검증 단위로 쪼갬. 수치·날짜·연도·직접인용·「문서명」·조문을 **항목(atom)** 으로, 링크·DOI·arXiv·ISBN·(저자, 연도)·각주를 **출처**로 등록. 출처 없는 수치 문장, 참고문헌에 없는 인용, 본문에서 부르지 않는 문헌을 표시 | 숫자·인용이 없는 사실 주장("○○ 제도는 폐지됐다")은 기계가 고르지 못한다. 필요하면 `claims`에 직접 추가 |
 | probe | 실제로 접속해 `access_status`만 기록. 본문은 `fv_sources/Sxx.txt`에 저장. **판정은 하지 않는다** | 접속 실패(BLOCKED·NOT_FOUND·EMPTY_BODY)면 대체 원문·색인을 찾고(R1), 찾은 출처를 `sources`에 추가하고 `alt_for`로 잇는다 |
+| lookup | DOI·링크 없는 참고문헌(`kind: bib`, 목록 전체)을 Crossref 서지 검색으로 찾아 `lookup`에 기록: `MATCH`(제목 일치 0.9 이상, 첫 저자 불일치·서평·다른 판이 아님) · `CANDIDATE`(사람이 확인) · `NO_MATCH` · `SKIP` · `ERROR`. MATCH면 DOI·연도·권·호 불일치(`mismatch`)와 철회 여부(`meta.retraction`)를 적고 `access_status`를 METADATA_ONLY로 | NO_MATCH 국문 문헌은 KCI·RISS·국회도서관에서 확인. 없다고 판정하지 않는다. CANDIDATE는 후보 DOI를 열어 같은 문헌인지 본다 |
 | (판정) | — | 항목마다 원문을 읽고 `checks`를 채운 뒤 주장별 `verdict`를 정한다 |
 | check | 판정이 아래 규칙을 지켰는지 점검 | [필수]를 0으로 만든다 |
 | report | 건수를 **코드가 세어** 보고서 작성. [필수]가 남아 있으면 만들지 않음 | 정정 내역을 덧붙여 사용자에게 보고 |
@@ -40,6 +42,9 @@ python3 scripts/fv.py selftest
 | `text_file` | 저장된 원문(.txt면 발췌 대조에 쓰임, .pdf는 대조 불가 → 검증자가 읽은 쪽을 .txt로 저장하면 대조됨) |
 | `alt_for` | 이 출처가 대신하는 원래 출처 번호(원래 링크의 NOT_FOUND는 그대로 남긴다) |
 | `speaker_own` | 발언자 본인 계정·본인 발표. 발언 귀속 주장("○○가 '…'라고 썼다")에 한해 1차 원출처로 인정 |
+| `meta.retraction` | (v1.4) DOI의 철회 상태: `status`(retracted·concern·corrected·none·unknown) · `notices`(공지 종류·공지 DOI·날짜) · `via`(crossref·openalex). `unknown`은 확인 못 함이지 철회 아님이 아니다 |
+| `lookup` | (v1.4) 서지 조회 결과: `status` · `doi` · `score`(제목 일치도) · `author_match` · `mismatch`(연도·권·호) · `candidates` · `note` |
+| `uncited` | (v1.4) 본문에서 부르지 않은 참고문헌을 서지 조회용으로 올린 출처 |
 
 `access_status`의 뜻:
 
@@ -87,8 +92,9 @@ python3 scripts/fv.py selftest
 | Tier 4만으로 VERIFIED (발언자 본인 채널의 발언 귀속은 예외) | Step 1 |
 | NEEDS_REVIEW·REJECT·NO_SOURCE에 사유·다음 조치 없음 | 재조사 요청서 |
 | 반박·근거 부족 기록이 있는데 VERIFIED | 판정 일관성 |
+| 철회된 문헌을 근거(SUPPORTS)로 씀 (v1.4) | 철회 사실 자체를 다루는 문장이 아니면 빼거나 교체 |
 
-[권고]: 원문 그대로라던 숫자가 발췌에 없음, 계산 수치가 본문에서 원문 수치처럼 보임, 취지만 같은 인용에 따옴표, 식별자 형식 오류(arXiv 월 13, ISBN 체크숫자), 참고문헌에 없는 인용.
+[권고]: 원문 그대로라던 숫자가 발췌에 없음, 계산 수치가 본문에서 원문 수치처럼 보임, 취지만 같은 인용에 따옴표, 식별자 형식 오류(arXiv 월 13, ISBN 체크숫자), 참고문헌에 없는 인용, (v1.4) 근거로 쓰지 않은 철회 문헌·우려 표명 문헌, 참고문헌의 연도·권·호가 Crossref 서지와 다름.
 
 ## 한계
 

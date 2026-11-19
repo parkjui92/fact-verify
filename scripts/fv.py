@@ -17,6 +17,7 @@
 import argparse
 import datetime as _dt
 import difflib
+import difflib
 import hashlib
 import html
 import json
@@ -25,7 +26,9 @@ import random
 import re
 import socket
 import ssl
+import subprocess
 import sys
+import time
 import unicodedata
 import urllib.error
 import urllib.parse
@@ -33,7 +36,7 @@ import urllib.request
 import zipfile
 from xml.etree import ElementTree as ET
 
-VERSION = "1.3.1"
+VERSION = "1.5.0"
 SCHEMA = "fact-verify/ledger@1"
 
 VERDICTS = ("PENDING", "VERIFIED", "NEEDS_REVIEW", "REJECT", "NO_SOURCE", "OUT_OF_SCOPE")
@@ -194,8 +197,8 @@ PROTECT = [
 MASK = "\ue000"
 SPLIT = re.compile(r"(?<=[.?!。])\s+(?=\S)")
 
-URL_RE = re.compile(r"https?://[^\s<>\"'「」『』\]\)）]+")
-DOI_RE = re.compile(r"\b(10\.\d{4,9}/[^\s\"<>，,;)\]]+)")
+URL_RE = re.compile(r"https?://(?:[^\s<>\"'「」『』\]\)）(]|\([^\s()<>]*\))+")   # 짝 맞는 괄호는 주소의 일부
+DOI_RE = re.compile(r"\b(10\.\d{4,9}/(?:[^\s\"<>，,;()\]]|\([^\s()]*\))+)")   # S0140-6736(97)11096-0 같은 괄호
 ARXIV_RE = re.compile(r"(?:arxiv\.org/(?:abs|pdf)/|arXiv:\s?)(\d{4}\.\d{4,5})(v\d+)?", re.I)
 ISBN_RE = re.compile(r"ISBN(?:-1[03])?[:\s]*([\dXx][\d\-\s]{8,16}[\dXx])")
 FN_REF = re.compile(r"\[\^([\w-]+)\](?!:)")
@@ -313,8 +316,15 @@ def atoms_of(sentence):
 def cites_of(sentence):
     out = []
     for m in URL_RE.finditer(sentence):
-        out.append(("url", m.group(0).rstrip(".,;:·")))
+        u = m.group(0).rstrip(".,;:·")
+        d = re.match(r"https?://(?:dx\.)?doi\.org/(10\.\d{4,9}/.+)$", u, re.I)
+        if d:                                         # doi.org 주소는 DOI로(등록·철회 확인 대상)
+            out.append(("doi", urllib.parse.unquote(d.group(1))))
+            continue
+        out.append(("url", u))
     for m in DOI_RE.finditer(sentence):
+        if any(k == "doi" and v == m.group(1).rstrip(".,;:") for k, v in out):
+            continue
         if "doi.org/" + m.group(1) in sentence and any(
                 k == "url" and m.group(1) in v for k, v in out):
             continue
@@ -506,7 +516,7 @@ def extract(text, path=None):
             if r not in cited_refs and AUTHOR_YEAR.search("(" + r + ")") is None:
                 pass
             if r not in cited_refs and re.search(r"(19|20)\d{2}", r):
-                ledger["orphans"]["references_never_cited"].append(r[:160])
+                ledger["orphans"]["references_never_cited"].append(r[:600])   # 서지 조회에 권·호·쪽이 필요
     return ledger
 
 
@@ -539,7 +549,26 @@ def _ctx():
         return ssl.create_default_context()
 
 
+def _iri_to_uri(url):
+    """한글 등 비ASCII가 든 주소(IRI)를 urllib이 받는 URI로 — 경로·질의만 퍼센트 인코딩, 호스트는 IDNA."""
+    if all(ord(c) < 128 for c in url):
+        return url
+    try:
+        sp = urllib.parse.urlsplit(url)
+        host = sp.hostname.encode("idna").decode("ascii") if sp.hostname else ""
+        netloc = host + (":%d" % sp.port if sp.port else "")
+        if sp.username:
+            netloc = sp.username + ("@" if not sp.password else ":" + sp.password + "@") + netloc
+        return urllib.parse.urlunsplit((sp.scheme, netloc,
+                                        urllib.parse.quote(sp.path, safe="/%:@!$&'()*+,;="),
+                                        urllib.parse.quote(sp.query, safe="=&%:@!$'()*+,;/?"),
+                                        urllib.parse.quote(sp.fragment, safe="%:@!$&'()*+,;=/?")))
+    except Exception:
+        return url
+
+
 def fetch(url, timeout=15, accept=None, limit=6_000_000):
+    url = _iri_to_uri(url)
     req = urllib.request.Request(url, headers={
         "User-Agent": UA, "Accept": accept or "text/html,application/xhtml+xml,application/pdf;q=0.9,*/*;q=0.8",
         "Accept-Language": "ko,en;q=0.8"})
@@ -621,7 +650,235 @@ def probe_doi(doi, timeout=15):
                             for a in (j.get("author") or [])][:6]}
     except Exception:
         pass
-    return "METADATA_ONLY", meta, "DOI 등록 확인 — 본문은 아님"
+    note = "DOI 등록 확인 — 본문은 아님"
+    ret = retraction_status(doi, timeout)
+    meta["retraction"] = ret
+    if ret["status"] in RET_LABEL:
+        note += " · " + RET_LABEL[ret["status"]]
+    return "METADATA_ONLY", meta, note
+
+
+# ---------------------------------------------------------------- 철회·서지 조회
+
+# Crossref 'updated-by'의 갱신 종류 → 상태. Crossref는 2023년부터 Retraction Watch 자료를 함께 싣는다.
+RET_TYPES = {"retraction": "retracted", "withdrawal": "retracted", "removal": "retracted",
+             "partial_retraction": "retracted", "expression_of_concern": "concern",
+             "correction": "corrected", "erratum": "corrected", "corrigendum": "corrected",
+             "addendum": "corrected"}
+RET_RANK = {"unknown": -1, "none": 0, "corrected": 1, "concern": 2, "retracted": 3}
+RET_LABEL = {"retracted": "⚠ 철회된 논문", "concern": "⚠ 우려 표명(expression of concern)",
+             "corrected": "정정 공지 있음"}
+
+
+def _json(url, timeout=15):
+    r = fetch(url, timeout=timeout, accept="application/json")
+    if r.get("status") != 200:
+        return None, r.get("status") or r.get("error")
+    try:
+        return json.loads(r["data"].decode("utf-8")), 200
+    except Exception:
+        return None, "JSON 해석 실패"
+
+
+def crossref_retraction(msg):
+    """Crossref 작품 레코드 → 철회·우려·정정 상태. 네트워크를 쓰지 않는다."""
+    notices = []
+    for u in msg.get("updated-by") or []:
+        t = re.sub(r"[\s-]+", "_", (u.get("type") or "").strip().lower())
+        st = RET_TYPES.get(t)
+        if st:
+            dp = ((u.get("updated") or {}).get("date-parts") or [[]])[0]
+            notices.append({"status": st, "type": t, "notice_doi": u.get("DOI"),
+                            "date": "-".join("%02d" % x if i else str(x) for i, x in enumerate(dp) if x),
+                            "source": u.get("source")})
+    titles = (msg.get("title") or []) + (msg.get("original-title") or [])
+    if any(re.match(r"\s*(?:RETRACTED|WITHDRAWN)\b", t or "") for t in titles) and \
+            not any(n["status"] == "retracted" for n in notices):
+        notices.append({"status": "retracted", "type": "title_mark", "notice_doi": None,
+                        "date": "", "source": "제목 표시"})
+    status = max((n["status"] for n in notices), key=RET_RANK.get, default="none")
+    return {"status": status, "notices": notices, "via": "crossref"}
+
+
+def retraction_status(doi, timeout=15, msg=None):
+    """DOI의 철회·우려 표명·정정 여부. Crossref에 없으면 OpenAlex(is_retracted)로. 둘 다 키가 필요 없다.
+    'unknown'은 확인하지 못했다는 뜻이지 철회되지 않았다는 뜻이 아니다."""
+    if msg is None:
+        j, code = _json("https://api.crossref.org/works/" + urllib.parse.quote(doi, safe="/()"), timeout)
+        msg = (j or {}).get("message") if j else None
+    if msg:
+        return crossref_retraction(msg)
+    key = os.environ.get("OPENALEX_API_KEY")
+    url = "https://api.openalex.org/works/doi:%s?select=id,is_retracted" % urllib.parse.quote(doi, safe="/()")
+    j, code = _json(url + ("&api_key=" + key if key else ""), timeout)
+    if j is not None and "is_retracted" in j:
+        return {"status": "retracted" if j["is_retracted"] else "none", "notices": [], "via": "openalex"}
+    return {"status": "unknown", "notices": [], "via": None,
+            "note": "Crossref·OpenAlex 모두 레코드 없음(%s) — 철회 여부 미확인" % code}
+
+
+HANGUL = re.compile(r"[가-힣]")
+
+
+def _tnorm(s):
+    """제목 대조용: 정규화 후 글자·숫자만 남긴다."""
+    return re.sub(r"[\W_]+", "", norm(html.unescape(s or "")))
+
+
+def title_match(ref, titles):
+    """참고문헌 한 줄과 후보 제목들의 일치도(0~1). 후보 제목(또는 부제를 뗀 본제목)이
+    참고문헌 줄 안에 글자 그대로 들어 있으면 1.0/0.9, 아니면 가장 긴 공통 구간 비율."""
+    r = _tnorm(ref)
+    best = 0.0
+    for t in titles:
+        if not t:
+            continue
+        tn = _tnorm(t)
+        if len(tn) < 6:
+            continue
+        if tn in r:
+            return 1.0
+        parts = [_tnorm(p) for p in re.split(r"\s[-–—:]\s|:\s|\s-|-\s", t)]
+        if any(len(p) >= 8 and p in r for p in parts):
+            best = max(best, 0.9)
+            continue
+        sm = difflib.SequenceMatcher(None, tn, r, autojunk=False)
+        blk = sm.find_longest_match(0, len(tn), 0, len(r))
+        best = max(best, blk.size / len(tn))
+    return round(best, 2)
+
+
+def _ref_vol_issue(ref):
+    for rx in (r"(\d{1,4})\s?\(\s?(\d{1,5})(?:\s?[-–]\s?\d{1,5})?\s?\)",
+               r"제?\s?(\d{1,4})\s?권\s?(?:제?\s?(\d{1,3})\s?호)?",
+               r"[Vv]ol\.?\s?(\d{1,4})\s?,?\s?(?:[Nn]o\.?|[Ii]ssue)\s?(\d{1,3})",
+               r"[」』*]\s*,\s*(\d{1,4})()\s*,\s*\d"):        # 「학술지」, 93, 175-199
+        m = re.search(rx, ref)
+        if m:
+            return m.group(1), m.group(2)
+    return None, None
+
+
+def _journal_like(ref):
+    """권·호 또는 쪽 범위·논문 번호가 있으면 학술지 글 인용으로 본다(없으면 단행본·보고서)."""
+    return bool(_ref_vol_issue(ref)[0] or re.search(r"(?<![\d~])\d{1,5}\s?[-–]\s?\d{1,5}\s*\.?\s*$|,\s*e\d{3,}\b|pp?\.\s?\d", ref.strip()))
+
+
+def biblio_mismatch(ref, item):
+    """참고문헌 줄의 연도·권·호를 Crossref 서지와 대조. 학술지명은 Crossref에 영문으로만
+    올라 있는 국문지가 많아 대조하지 않는다."""
+    out = []
+    ys = [int(y) for y in re.findall(r"(?<!\d)((?:19|20)\d{2})(?!\d)", ref)]
+    dp = []
+    for k in ("published-print", "issued", "published-online"):
+        dp = ((item.get(k) or {}).get("date-parts") or [[None]])[0]
+        if dp and dp[0]:
+            break
+    cy = dp[0] if dp else None
+    if ys and cy and cy not in ys:
+        on = ((item.get("published-online") or {}).get("date-parts") or [[None]])[0][0]
+        if on not in ys:
+            out.append("연도: 참고문헌 %s ↔ 서지 %s" % (ys[0], cy))
+    v, i = _ref_vol_issue(ref)
+    cv, ci = str(item.get("volume") or ""), str(item.get("issue") or "")
+    if v and cv and re.sub(r"\D", "", cv) and v != re.sub(r"\D", "", cv):
+        out.append("권: 참고문헌 %s ↔ 서지 %s" % (v, cv))
+    if i and ci and re.sub(r"\D", "", ci) and i != re.sub(r"\D", "", ci).lstrip("0"):
+        out.append("호: 참고문헌 %s ↔ 서지 %s" % (i, ci))
+    return out
+
+
+def _ref_first_author(ref):
+    """참고문헌 줄 맨 앞의 첫 저자(성 또는 기관명). 못 뽑으면 None."""
+    head = re.split(r"\(\s*(?:19|20)\d{2}|\s(?:19|20)\d{2}[a-z]?[.,]", LIST_MARK.sub("", ref.strip()), 1)[0]
+    head = head.strip(" .,*")
+    if not head:
+        return None
+    first = re.split(r"\s*[·∙;&]\s*|\s+and\s+|\s*외\b|\s*등\b|\s*et al", head, 1)[0].strip(" .,")
+    if re.match(r"[A-Za-z]", first):
+        fam = first.split(",")[0].strip()
+        return fam if " " not in fam else fam.split()[-1]
+    return first.split(",")[0].strip() or None
+
+
+def author_agrees(ref, item):
+    """첫 저자가 후보 서지의 저자에 있는가. True·False, 비교할 수 없으면 None
+    (후보에 저자가 없음, 한글 저자↔로마자 저자, 저자를 못 뽑음)."""
+    fa = _ref_first_author(ref)
+    auths = item.get("author") or []
+    if not fa or not auths:
+        return None
+    names = []
+    for au in auths:
+        fam, giv, nm = au.get("family") or "", au.get("given") or "", au.get("name") or ""
+        names += [fam, nm, fam + giv, giv + fam]
+    names = [_tnorm(n) for n in names if n]
+    key = _tnorm(fa)
+    if bool(HANGUL.search(fa)) != any(HANGUL.search(n) for n in names):
+        return None
+    return any(key and (key == n or (len(key) >= 3 and key in n) or (len(n) >= 2 and n in key and HANGUL.search(n)))
+               for n in names)
+
+
+def crossref_search(ref, timeout=15, rows=5):
+    q = urllib.parse.urlencode({"query.bibliographic": ref[:300], "rows": rows})
+    j, code = _json("https://api.crossref.org/works?" + q, timeout)
+    if j is None and (code in (429, 500, 502, 503, 504) or not isinstance(code, int)):
+        time.sleep(3)                                 # 공개 API 빈도 제한·일시 장애 — 한 번만 다시
+        j, code = _json("https://api.crossref.org/works?" + q, timeout)
+    if j is None:
+        return None, code
+    return (j.get("message") or {}).get("items") or [], 200
+
+
+def lookup_ref(ref, timeout=15, items=None):
+    """참고문헌 한 줄 → Crossref 서지 일치 여부. items를 주면 네트워크를 쓰지 않는다(시험용).
+    MATCH(0.9 이상)·CANDIDATE(0.6 이상)·NO_MATCH. 못 찾았다고 없는 문헌은 아니다."""
+    if items is None:
+        items, code = crossref_search(ref, timeout)
+        if items is None:
+            return {"status": "ERROR", "note": "Crossref 조회 실패: %s" % code}
+    scored = []
+    for it in items:
+        titles = (it.get("original-title") or []) + (it.get("title") or [])
+        sub = it.get("subtitle") or []
+        if sub and it.get("title"):
+            titles.append(it["title"][0] + " " + sub[0])
+        scored.append((title_match(ref, titles), it))
+    au = {id(it): author_agrees(ref, it) for _, it in scored}
+    yr_ok = {id(it): not any(m.startswith("연도") for m in biblio_mismatch(ref, it)) for _, it in scored}
+    # 제목이 같으면 저자 일치 > 비교 불가 > 불일치, 다음으로 연도 일치를 앞에
+    scored.sort(key=lambda x: (-(x[0] >= 0.9), -{True: 2, None: 1, False: 0}[au[id(x[1])]], -yr_ok[id(x[1])], -x[0]))
+    cands = [{"doi": it.get("DOI"), "title": ((it.get("original-title") or it.get("title") or [""])[0])[:120],
+              "container": (it.get("container-title") or [""])[0], "score": sc,
+              "author_match": au[id(it)], "type": it.get("type")}
+             for sc, it in scored[:3]]
+    if scored and scored[0][0] >= 0.9 and au[id(scored[0][1])] is False:
+        return {"status": "CANDIDATE", "candidates": cands, "via": "crossref",
+                "note": "제목은 같은데 첫 저자가 다름 — 서평·다른 판·같은 제목의 다른 글일 수 있어 직접 확인"}
+    if scored and scored[0][0] >= 0.9 and not _journal_like(ref):
+        top = scored[0][1]                              # 단행본·보고서 인용(권·호 없음)
+        if top.get("type") == "journal-article":        # 서평 레코드는 원저자를 저자로 싣기도 한다
+            return {"status": "CANDIDATE", "candidates": cands, "via": "crossref",
+                    "note": "단행본·보고서 인용인데 같은 제목의 학술지 글과 맞음 — 서평일 수 있어 직접 확인"}
+        if not yr_ok[id(top)]:                          # 학술지 논문의 연도 차이는 오기로 보고(MATCH+불일치)
+            return {"status": "CANDIDATE", "candidates": cands, "via": "crossref",
+                    "note": "단행본 인용인데 서지 연도가 다름 — 다른 판일 수 있어 직접 확인"}
+    if scored and scored[0][0] >= 0.9:
+        sc, it = scored[0]
+        dp = ((it.get("issued") or {}).get("date-parts") or [[None]])[0]
+        return {"status": "MATCH", "doi": it.get("DOI"), "score": sc,
+                "title": cands[0]["title"], "container": cands[0]["container"],
+                "year": dp[0] if dp else None, "volume": it.get("volume"), "issue": it.get("issue"),
+                "page": it.get("page"), "author_match": au[id(it)], "mismatch": biblio_mismatch(ref, it),
+                "retraction": crossref_retraction(it), "candidates": cands[1:], "via": "crossref"}
+    if scored and scored[0][0] >= 0.6:
+        return {"status": "CANDIDATE", "candidates": cands, "via": "crossref",
+                "note": "제목이 비슷한 문헌만 있음 — 같은 문헌인지 직접 확인"}
+    return {"status": "NO_MATCH", "candidates": cands[:1], "via": "crossref",
+            "note": ("Crossref에 없음 — 국문 문헌은 DOI가 없는 경우가 많다. KCI(kci.go.kr)·RISS·국회도서관을 "
+                     "내장 브라우저로 찾아 확인할 것. 못 찾았다고 없는 문헌으로 판정하지 않는다")
+            if HANGUL.search(ref) else "Crossref에 없음 — 저자·제목으로 다시 찾을 것"}
 
 
 def probe_arxiv(aid, timeout=15):
@@ -657,12 +914,13 @@ def cmd_probe(a):
             st, title, text, note = classify(r)
             s.update(http_status=r.get("status"), final_url=r.get("final_url"), title=title)
             if st == "FULL_TEXT":
+                _note_change(s, hashlib.sha256(r["data"]).hexdigest())
                 if text is None:
                     fn = os.path.join(save_dir, sid + ".pdf")
                     with open(fn, "wb") as f:
                         f.write(r["data"])
-                    s.update(text_file=os.path.relpath(fn, os.path.dirname(os.path.abspath(a.ledger))),
-                             text_chars=None)
+                    st, note = _ingest_pdf(s, sid, fn, save_dir, os.path.dirname(os.path.abspath(a.ledger)),
+                                           "fetched %s" % now())
                 else:
                     fn = os.path.join(save_dir, sid + ".txt")
                     with open(fn, "w", encoding="utf-8") as f:
@@ -682,6 +940,8 @@ def cmd_probe(a):
             if wb:
                 s.setdefault("meta", {})["wayback"] = wb
                 note += " · 보관본 %s (%s)" % (wb["url"], (wb.get("timestamp") or "")[:8])
+        if s.get("changed_at") and s["changed_at"][:16] == now()[:16]:
+            note += " · 지난 확인 뒤 원문이 바뀜"
         s.update(access_status=st, note=note, probed_at=now())
         counts[st] = counts.get(st, 0) + 1
         print("%s  %-13s %s  %s" % (sid, st, s["ref"][:70], note[:60]))
@@ -691,12 +951,80 @@ def cmd_probe(a):
     return 0
 
 
+def _register_uncited(led):
+    """본문에서 부르지 않은 참고문헌도 서지 조회 대상으로 원장 출처에 올린다(uncited 표시)."""
+    have = {s["ref"] for s in led["sources"].values()}
+    n = len(led["sources"])
+    for r in led.get("orphans", {}).get("references_never_cited", []):
+        if r in have:
+            continue
+        n += 1
+        sid = "S%02d" % n
+        while sid in led["sources"]:
+            n += 1
+            sid = "S%02d" % n
+        led["sources"][sid] = {
+            "kind": "bib", "ref": r, "tier": None, "chain": None, "access_status": "NOT_CHECKED",
+            "http_status": None, "final_url": None, "title": None, "text_file": None,
+            "text_chars": None, "meta": {}, "note": "", "format_issue": None, "alt_for": None,
+            "uncited": True}
+        have.add(r)
+
+
+def cmd_lookup(a):
+    """참고문헌(bib) 출처를 Crossref 서지 검색으로 찾아 DOI·연도·권호 대조와 철회 여부를 기록한다."""
+    led = load(a.ledger)
+    if not a.cited_only:
+        _register_uncited(led)
+    todo = []
+    for sid, s in led["sources"].items():
+        if s["kind"] != "bib" or (s.get("lookup") and not a.force):
+            continue
+        if a.only and sid not in set(a.only.split(",")):
+            continue
+        ref = s["ref"]
+        if DOI_RE.search(ref) or URL_RE.search(ref):
+            s["lookup"] = {"status": "SKIP", "note": "DOI·링크가 있는 문헌 — probe가 확인"}
+            continue
+        if len(_tnorm(ref)) < 20:
+            s["lookup"] = {"status": "SKIP", "note": "서지가 너무 짧음(저자·연도뿐) — 참고문헌 목록과 이어지지 않은 인용"}
+            continue
+        todo.append((sid, s))
+    counts = {}
+    for n, (sid, s) in enumerate(todo):
+        if n:
+            time.sleep(a.sleep)
+        res = lookup_ref(s["ref"], a.timeout)
+        res["checked_at"] = now()
+        s["lookup"] = res
+        st = res["status"]
+        if st == "MATCH":
+            s["meta"] = dict(s.get("meta") or {}, doi=res["doi"], title=res["title"],
+                             container=res["container"], year=res["year"],
+                             retraction=res["retraction"])
+            if s["access_status"] == "NOT_CHECKED":
+                s["access_status"] = "METADATA_ONLY"
+            s["note"] = "Crossref 서지 일치 — DOI %s" % res["doi"]
+            if res["mismatch"]:
+                s["note"] += " · 서지 불일치: " + "; ".join(res["mismatch"])
+            if res["retraction"]["status"] in RET_LABEL:
+                s["note"] += " · " + RET_LABEL[res["retraction"]["status"]]
+        counts[st] = counts.get(st, 0) + 1
+        print("%s  %-9s %s  %s" % (sid, st, _cell(s["ref"], 60), _cell(s["note"] if st == "MATCH" else res.get("note", ""), 70)))
+    dump(led, a.ledger)
+    print("\n서지 조회 %d건: %s" % (len(todo), ", ".join("%s %d" % kv for kv in sorted(counts.items())) or "없음"))
+    print("※ NO_MATCH는 '없는 문헌'이 아닙니다. 국문 문헌은 KCI·RISS·국회도서관에서 따로 확인하세요.")
+    return 0
+
+
 # ---------------------------------------------------------------- 점검
 
 def _source_text(led, sid, base):
     s = led["sources"].get(sid) or {}
     fn = s.get("text_file")
-    if not fn or fn.endswith(".pdf"):
+    if fn and fn.endswith(".pdf"):
+        fn = fn[:-4] + ".txt"
+    if not fn:
         return None
     p = fn if os.path.isabs(fn) else os.path.join(base, fn)
     if not os.path.exists(p):
@@ -722,6 +1050,42 @@ def check_ledger(led, base=".", final=False):
             add("권고", sid, "식별자 형식 문제 — %s (%s)" % (s["format_issue"], s.get("ref")))
         if s.get("tier") not in (None, 1, 2, 3, 4):
             add("필수", sid, "tier는 1~4")
+        ret = (s.get("meta") or {}).get("retraction") or {}
+        rst = ret.get("status")
+        if rst in ("retracted", "concern"):
+            notice = next((n for n in ret.get("notices", []) if n["status"] == rst), {})
+            when = " %s" % notice["date"] if notice.get("date") else ""
+            supports = [c["id"] for c in led.get("claims", []) for k in c.get("checks", [])
+                        if k.get("source") == sid and k.get("evidence_status") == "SUPPORTS"]
+            label = "철회된 문헌" if rst == "retracted" else "우려 표명(expression of concern)이 붙은 문헌"
+            if rst == "retracted" and supports:
+                add("필수", sid, "%s(%s%s)을 근거로 씀(%s) — 철회 사실 자체를 다루는 문장이 아니면 빼거나 다른 근거로 교체"
+                    % (label, s.get("ref", "")[:60], when, ", ".join(dict.fromkeys(supports))))
+            else:
+                add("권고", sid, "%s(%s%s) — 인용 이유를 확인하고, 쓴다면 본문에 그 사실을 밝힐 것"
+                    % (label, s.get("ref", "")[:60], when))
+        elif rst == "corrected":
+            add("참고", sid, "정정 공지가 있는 문헌 — 인용한 수치·문장이 정정 대상인지 확인")
+        supp = [c["id"] for c in led.get("claims", []) for k in c.get("checks", [])
+                if k.get("source") == sid and k.get("evidence_status") == "SUPPORTS"]
+        idt = s.get("identity") or {}
+        if idt.get("ok") is False and not idt.get("override"):
+            add("필수" if supp else "권고", sid, "받은 파일이 그 문헌이 아닐 수 있음 — %s%s (같은 문헌이면 attach --accept-identity '사유')"
+                % (idt.get("reason", ""), " · 근거로 씀: " + ", ".join(dict.fromkeys(supp)) if supp else ""))
+        if s.get("changed_at") and supp:
+            add("권고", sid, "원문이 %s에 바뀜 — 이 출처로 판정한 주장(%s)의 발췌를 다시 대조"
+                % (s["changed_at"][:10], ", ".join(dict.fromkeys(supp))))
+        if s.get("pdf_health") == "scan" and supp:
+            add("참고", sid, "스캔본 PDF — 발췌를 기계로 대조하지 못함(OCR 뒤 attach로 다시 붙이면 대조됨)")
+        lk = s.get("lookup") or {}
+        if lk.get("status") == "MATCH" and lk.get("mismatch"):
+            add("권고", sid, "참고문헌 서지가 Crossref와 다름 — %s (DOI %s)" % ("; ".join(lk["mismatch"]), lk.get("doi")))
+        elif lk.get("status") == "CANDIDATE":
+            add("참고", sid, "비슷한 제목의 문헌만 찾음 — 같은 문헌인지 직접 확인 (%s)"
+                % ", ".join(c["doi"] or "" for c in lk.get("candidates", [])[:2]))
+        elif lk.get("status") == "NO_MATCH" and s.get("access_status") == "NOT_CHECKED":
+            add("참고", sid, "Crossref에서 찾지 못함 — %s" % ("KCI·RISS·국회도서관 확인 필요(없는 문헌으로 판정 금지)"
+                                                         if HANGUL.search(s.get("ref", "")) else "저자·제목으로 재검색"))
     for c in led.get("claims", []):
         cid, v = c["id"], c.get("verdict", "PENDING")
         if v not in VERDICTS:
@@ -765,6 +1129,12 @@ def check_ledger(led, base=".", final=False):
             if tiers and all(t == 4 for t in tiers) and not (
                     speech_only and sup and all(x.get("speaker_own") for x in sup)):
                 add("필수", cid, "Tier 4 출처만으로 VERIFIED — 원출처를 찾아 대체 (발언 귀속 주장이면 발언자 본인 채널에 speaker_own 표시)")
+            ceil, why_c = confidence_ceiling(led, c)
+            if c.get("confidence") in CONF_RANK and CONF_RANK[c["confidence"]] > CONF_RANK[ceil]:
+                add("필수", cid, "확신도 '%s'는 근거가 허용하는 상한 '%s'(%s)를 넘음 — 확신도는 계산값을 쓴다"
+                    % (c["confidence"], ceil, why_c))
+            for msg in _legs(led, c)[2]:
+                add("권고", cid, msg + " — 출처에 chain을 같은 값으로 적을 것")
         for k in checks:
             ev, src = k.get("evidence_status"), srcs.get(k.get("source")) or {}
             acc = src.get("access_status", "NOT_CHECKED")
@@ -876,6 +1246,263 @@ def cmd_check(a):
 
 # ---------------------------------------------------------------- 보고서
 
+# ---------------------------------------------------------------- 받은 파일 점검 · 확신도 상한
+# 착안: roomi-fields/paper-trail(MIT) lib/validate_pdf_content.py — PDF 상태 판정과 첫 쪽 제목·DOI 대조,
+#       Socialpranker/deepdive(MIT) scripts/score_claims.py·fetch_source.py — 확신도를 모델이 아니라 계산으로,
+#       같은 주소를 두 근거로 세지 않기, 원문 사본 해시. 코드는 옮기지 않고 규칙을 이 원장 구조에 맞춰 다시 짰다.
+
+GENERIC_EN = {"study", "studies", "analysis", "approach", "review", "using", "based", "towards", "toward",
+              "effect", "effects", "impact", "model", "models", "system", "systems", "research", "evidence",
+              "between", "among", "about", "their", "within", "through", "large", "language", "policy",
+              "report", "paper", "article", "journal", "volume", "issue", "international", "national"}
+GENERIC_KO = {"연구", "분석", "방안", "보고서", "대한", "관한", "위한", "정책", "현황", "과제", "개선", "방향",
+              "중심으로", "중심", "실태", "검토", "사례", "기반", "활용", "효과", "영향", "최종보고서", "결과"}
+KO_TAIL = re.compile(r"(으로|에서|에게|과의|와의|의|과|와|에|및|을|를|은|는|이|가|로)$")
+CONF_RANK = {"low": 0, "medium": 1, "high": 2}
+
+
+def _pdftotext(path, last=None, timeout=60):
+    cmd = ["pdftotext", "-layout"] + (["-l", str(last)] if last else []) + [path, "-"]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, errors="ignore", timeout=timeout)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.stdout if r.returncode == 0 else None
+
+
+def pdf_health(path):
+    """받은 PDF의 몸 상태 → (상태, 설명). ok·too_small·wrong_format·unreadable·scan·no_tool."""
+    size = os.path.getsize(path)
+    if size < 3000:
+        return "too_small", "%d바이트 — 오류 안내나 빈 파일" % size
+    with open(path, "rb") as f:
+        head = f.read(5)
+    if not head.startswith(b"%PDF"):
+        return "wrong_format", "PDF가 아님(첫 바이트 %r)" % head
+    sample = _pdftotext(path, last=8)
+    if sample is None:
+        try:
+            subprocess.run(["pdftotext", "-v"], capture_output=True, timeout=10)
+        except OSError:
+            return "no_tool", "pdftotext가 없어 글자를 뽑지 못함"
+        return "unreadable", "pdftotext가 읽지 못함 — 깨진 파일일 수 있어 다시 받을 것"
+    pages = max(1, sample.count("\f") or 1)
+    cpp = len(sample.strip()) / min(pages, 8)
+    if cpp < 20:
+        return "scan", "앞쪽 쪽당 %.0f자 — 스캔본이라 OCR이 필요" % cpp
+    return "ok", "앞쪽 쪽당 %.0f자" % cpp
+
+
+def title_words(title):
+    """제목에서 흔하지 않은 낱말(영문 5자 이상·한글 2자 이상, 조사 뗌)."""
+    t = title or ""
+    out = [w.lower() for w in re.findall(r"[A-Za-z]{5,}", t) if w.lower() not in GENERIC_EN]
+    for w in re.findall(r"[가-힣]{2,}", t):
+        w2 = KO_TAIL.sub("", w) if len(w) > 2 else w
+        if len(w2) >= 2 and w2 not in GENERIC_KO:
+            out.append(w2)
+    return list(dict.fromkeys(out))
+
+
+def identity_check(text, title="", author="", doi="", wide=""):
+    """받은 문서 첫 쪽 글(text)이 기대한 문헌인지 → (True/False/None, 설명). None = 대조할 정보 없음.
+    DOI는 앞 6쪽(wide)까지 본다. 제목은 첫 쪽에서만 본다 — 앞쪽 참고문헌·서론에 인용된 다른 문헌 제목에 속지 않게.
+    paper-trail은 고유어 5개 중 3개면 통과지만, 같은 주제의 다른 논문이 첫 쪽에 그 낱말들을 늘 쓰므로
+    (시험: DeepTRACE 첫 쪽에 'generative search engines' 5회) 제목이 그대로 있거나 고유어 80% 이상일 때만 통과."""
+    low = (text or "").lower()
+    flat = re.sub(r"[^0-9a-z가-힣]", "", low)
+    d = (doi or "").strip().lower()
+    if d and (d in low or d in (wide or "").lower()):
+        return True, "DOI %s가 앞쪽에 있음" % d
+    words = title_words(title)
+    tflat = re.sub(r"[^0-9a-z가-힣]", "", (title or "").lower())
+    if len(tflat) >= 12 and tflat in flat:
+        return True, "제목이 첫 쪽에 그대로 있음"
+    if not words:
+        return None, "기대 제목이 없거나 흔한 낱말뿐이라 대조하지 못함"
+    hits = [w for w in words if re.sub(r"[^0-9a-z가-힣]", "", w) in flat]
+    need = len(words) if len(words) <= 2 else -(-len(words) * 4 // 5)
+    if len(hits) < need:
+        return False, "제목 고유어 %d/%d개만 첫 쪽에 보임(필요 %d: %s) — 다른 문서일 수 있음" % (
+            len(hits), len(words), need, ", ".join(words[:5]))
+    msg = "제목 고유어 %d/%d개 확인" % (len(hits), len(words))
+    if author:
+        toks = [x for x in re.findall(r"[A-Za-z]{3,}|[가-힣]{2,}", author) if x.lower() not in ("and", "et", "al")]
+        if toks and not any(x.lower() in low + (wide or "").lower() for x in toks):
+            msg += " · 저자 이름은 앞쪽에서 못 찾음(직접 확인 권장)"
+    return True, msg
+
+
+def _expected(s):
+    meta = s.get("meta") or {}
+    title = s.get("expect_title") or meta.get("title") or s.get("title") or ""
+    if isinstance(title, list):
+        title = title[0] if title else ""
+    if not title and s.get("kind") not in ("url", "doi", "arxiv"):
+        title = s.get("ref", "")
+    doi = s.get("expect_doi") or (s["ref"] if s.get("kind") == "doi" else "") or meta.get("doi") or ""
+    return title, s.get("expect_author") or "", doi
+
+
+def _save_text(save_dir, sid, header, text):
+    fn = os.path.join(save_dir, sid + ".txt")
+    with open(fn, "w", encoding="utf-8") as f:
+        f.write("%s\n\n%s\n" % (header, text))
+    return fn
+
+
+def _note_change(s, sha):
+    old = s.get("content_sha256")
+    if old and old != sha:
+        s["changed_at"], s["prev_sha256"] = now(), old
+    s["content_sha256"] = sha
+
+
+def _ingest_pdf(s, sid, pdf_path, save_dir, ledger_dir, label):
+    """PDF 한 건: 상태 판정 → 전문 글 추출 → 첫 쪽 대조. 결과를 s에 적고 (access_status, note)를 돌려준다."""
+    health, why = pdf_health(pdf_path)
+    rel = lambda p: os.path.relpath(p, ledger_dir)
+    s["pdf_file"] = rel(pdf_path)
+    s["pdf_health"] = health
+    if health in ("too_small", "wrong_format", "unreadable"):
+        return "EMPTY_BODY", "PDF 점검 실패 — %s" % why
+    if health in ("scan", "no_tool"):
+        s.update(text_file=rel(pdf_path), text_chars=None)
+        return "FULL_TEXT", "PDF — %s, 발췌를 기계로 대조하지 못함" % why
+    text = _pdftotext(pdf_path) or ""
+    page1 = _pdftotext(pdf_path, last=1) or text[:4000]
+    head6 = _pdftotext(pdf_path, last=6) or text[:20000]
+    if len(re.sub(r"\s", "", page1)) < 50:   # 표지가 그림이면 첫 글이 있는 쪽까지(paper-trail도 6쪽으로 넓힘)
+        page1 = head6[:6000]
+    title, author, doi = _expected(s)
+    ok, msg = identity_check(page1, title, author, doi, wide=head6)
+    s["identity"] = {"ok": ok, "reason": msg, "checked_at": now()}
+    fn = _save_text(save_dir, sid, "# %s\n# %s\n# %s" % (s.get("ref", ""), title or "", label), text)
+    s.update(text_file=rel(fn), text_chars=len(text))
+    note = "PDF 글 %d자 추출 · %s" % (len(text), msg)
+    return "FULL_TEXT", note
+
+
+def cmd_attach(a):
+    """에이전트·사용자가 따로 받은 파일(내려받은 PDF, 브라우저 본문 사본)을 원장 출처에 붙인다.
+    봇 확인 화면·빈 본문·다른 문헌이면 FULL_TEXT로 올리지 않는다."""
+    led = load(a.ledger)
+    s = led["sources"].get(a.sid)
+    if s is None:
+        print("원장에 없는 출처: %s" % a.sid, file=sys.stderr)
+        return 2
+    for k, v in (("expect_title", a.title), ("expect_author", a.author), ("expect_doi", a.doi)):
+        if v:
+            s[k] = v
+    ledger_dir = os.path.dirname(os.path.abspath(a.ledger))
+    save_dir = a.save_dir or os.path.join(ledger_dir, "fv_sources")
+    os.makedirs(save_dir, exist_ok=True)
+    with open(a.file, "rb") as f:
+        data = f.read()
+    _note_change(s, hashlib.sha256(data).hexdigest())
+    label = "attached %s (%s) %s" % (os.path.basename(a.file), a.via, now())
+    if data[:5] == b"%PDF-":
+        dst = os.path.join(save_dir, a.sid + ".pdf")
+        if os.path.abspath(a.file) != os.path.abspath(dst):
+            with open(dst, "wb") as f:
+                f.write(data)
+        st, note = _ingest_pdf(s, a.sid, dst, save_dir, ledger_dir, label)
+    else:
+        raw = data.decode("utf-8", errors="replace")
+        title, text = html_to_text(raw) if "<" in raw[:2000] and "</" in raw else (None, raw)
+        low = text.lower()[:4000] + " " + (title or "").lower()
+        if any(k in low for k in BLOCK_MARKS) and len(text) < 3000:
+            st, note = "BLOCKED", "붙인 파일이 봇 확인·접근 거부 화면임"
+        elif len(text.strip()) < 300:
+            st, note = "EMPTY_BODY", "붙인 파일의 본문이 %d자뿐" % len(text.strip())
+        else:
+            exp_t, exp_a, exp_d = _expected(s)
+            ok, msg = identity_check(text[:4000], exp_t, exp_a, exp_d, wide=text[:20000]) if (exp_t or exp_d) else (None, "기대 제목 없음")
+            s["identity"] = {"ok": ok, "reason": msg, "checked_at": now()}
+            fn = _save_text(save_dir, a.sid, "# %s\n# %s\n# %s" % (s.get("ref", ""), title or "", label), text)
+            s.update(text_file=os.path.relpath(fn, ledger_dir), text_chars=len(text))
+            st, note = "FULL_TEXT", "본문 %d자 · %s" % (len(text), msg)
+    if a.accept_identity and s.get("identity", {}).get("ok") is False:
+        s["identity"]["override"] = a.accept_identity
+        note += " · 사람이 같은 문헌으로 확인: %s" % a.accept_identity
+    s.update(access_status=st, note=note, probed_at=now(), acquired_via=a.via)
+    dump(led, a.ledger)
+    print("%s  %-11s %s" % (a.sid, st, note))
+    bad = st != "FULL_TEXT" or (s.get("identity", {}).get("ok") is False and not s["identity"].get("override"))
+    if s.get("changed_at"):
+        print("  ※ 이전에 확보한 원문과 내용이 다름 — 이 출처로 판정한 주장은 발췌를 다시 대조할 것")
+    return 1 if bad else 0
+
+
+def _url_key(u):
+    if not u:
+        return None
+    p = urllib.parse.urlparse(u.strip())
+    host = (p.netloc or "").lower()
+    host = host[4:] if host.startswith("www.") else host
+    return (host + p.path.rstrip("/")).lower() or None
+
+
+def _legs(led, c):
+    """독립 근거 묶음: 본문을 확보했고(서지 범위는 메타데이터도), 다른 문헌으로 의심되지 않으며,
+    같은 chain·같은 주소·거의 같은 발췌는 하나로 센다. → (묶음 목록, 1차 자료 여부, 메모)"""
+    srcs = led.get("sources", {})
+    groups, primary, notes = [], False, []
+    for k in c.get("checks", []):
+        sid = k.get("source")
+        if k.get("evidence_status") != "SUPPORTS" or sid not in srcs:
+            continue
+        s = srcs[sid]
+        acc = s.get("access_status")
+        if acc != "FULL_TEXT" and not (k.get("scope") == "bibliographic" and acc == "METADATA_ONLY"):
+            continue
+        idt = s.get("identity") or {}
+        if idt.get("ok") is False and not idt.get("override"):
+            continue
+        if s.get("abstract_only"):
+            continue
+        keys = {x for x in (s.get("chain"), _url_key(s.get("final_url")), _url_key(s.get("ref") if s.get("kind") == "url" else None)) if x}
+        ex = norm(k.get("excerpt") or "")
+        hit = None
+        for g in groups:
+            if g["sids"] == {sid} or sid in g["sids"] or keys & g["keys"]:
+                hit = g
+                break
+            if len(ex) >= 30 and any(len(e) >= 30 and difflib.SequenceMatcher(None, ex, e).ratio() >= 0.9 for e in g["ex"]):
+                hit = g
+                notes.append("%s와 %s의 발췌가 거의 같음 — 받아쓰기 의심, 근거 하나로 셈" % (sid, sorted(g["sids"])[0]))
+                break
+        if hit is None:
+            groups.append({"sids": {sid}, "keys": set(keys), "ex": [ex]})
+        else:
+            if sid not in hit["sids"] and keys & hit["keys"] and not s.get("chain"):
+                notes.append("%s와 %s가 같은 주소 — 근거 하나로 셈" % (sid, sorted(hit["sids"])[0]))
+            hit["sids"].add(sid)
+            hit["keys"] |= keys
+            hit["ex"].append(ex)
+        if s.get("tier") == 1:
+            primary = True
+    return groups, primary, list(dict.fromkeys(notes))
+
+
+def confidence_ceiling(led, c):
+    """확신도 상한을 계산한다(모델이 적은 값이 아니라). → (low|medium|high, 이유)
+    deepdive 규칙을 정책 문서에 맞게 바꿈: 정부 통계 한 건(1차)이면 '보통', 1차 자료에 독립 근거가 하나 더 있으면 '높음'.
+    문서가 그렇게 말했다는 주장(직접인용·날짜, claim_class=documentary)은 1차 자료 하나로 '높음'."""
+    groups, primary, _ = _legs(led, c)
+    n = len(groups)
+    documentary = c.get("claim_class") == "documentary" or (
+        c.get("atoms") and all(a["type"] in ("quote", "date", "year") for a in c["atoms"]))
+    if n == 0:
+        return "low", "본문을 확보한 근거 없음"
+    if primary and (n >= 2 or documentary):
+        return "high", "1차 자료 포함 독립 근거 %d" % n if n >= 2 else "문서 자체가 근거(1차 자료)"
+    if primary or n >= 2:
+        return "medium", "1차 자료 1건" if n == 1 else "독립 근거 %d·1차 자료 없음" % n
+    return "low", "독립 근거 1건·1차 자료 아님"
+
+
+
 def summarize(led):
     cl = led.get("claims", [])
     by_v = {v: sum(1 for c in cl if c.get("verdict") == v) for v in VERDICTS}
@@ -961,6 +1588,9 @@ def render_md(led):
         ind = _independent(led, c)
         if ind > 1:
             why = ("독립 출처 %d · " % ind) + why
+        if c.get("verdict") == "VERIFIED":
+            ceil, _w = confidence_ceiling(led, c)
+            why = ("확신도 상한 %s · " % {"high": "높음", "medium": "보통", "low": "낮음"}[ceil]) + why
         lines.append("| %s | %s | %s%s | %s | %s | %d/%d | %s | %s |" % (
             c["id"], _cell(_clean(c["sentence"])), _src_label(s0), more,
             (s0 or {}).get("tier") or "-", (s0 or {}).get("access_status", "-"),
@@ -987,6 +1617,32 @@ def render_md(led):
             lines.append("- 목록에 없는 인용: %s (%d행)" % (o["cite"], o["line"]))
         for r in orph.get("references_never_cited", []):
             lines.append("- 본문에서 부르지 않는 문헌: %s" % _cell(r, 100))
+    rets = [(sid, s) for sid, s in srcs.items()
+            if ((s.get("meta") or {}).get("retraction") or {}).get("status") in RET_LABEL]
+    if rets:
+        lines += ["", "### 철회·우려 표명·정정 문헌", ""]
+        for sid, s in rets:
+            r = s["meta"]["retraction"]
+            n = next((x for x in r.get("notices", []) if x["status"] == r["status"]), {})
+            lines.append("- %s %s — %s%s%s" % (sid, RET_LABEL[r["status"]], _cell(s["ref"], 80),
+                                                " (%s)" % n["date"] if n.get("date") else "",
+                                                " · 공지 DOI %s" % n["notice_doi"] if n.get("notice_doi") else ""))
+    lks = [(sid, s) for sid, s in srcs.items() if (s.get("lookup") or {}).get("status") in
+           ("MATCH", "CANDIDATE", "NO_MATCH", "ERROR")]
+    if lks:
+        cnt = {}
+        for _, s in lks:
+            cnt[s["lookup"]["status"]] = cnt.get(s["lookup"]["status"], 0) + 1
+        lines += ["", "### 참고문헌 서지 조회 (Crossref)", "",
+                  "일치 %d · 후보만 %d · 못 찾음 %d · 조회 실패 %d. 못 찾은 국문 문헌은 KCI·RISS·국회도서관 확인 대상이며 없는 문헌이라는 뜻이 아니다."
+                  % (cnt.get("MATCH", 0), cnt.get("CANDIDATE", 0), cnt.get("NO_MATCH", 0), cnt.get("ERROR", 0)), ""]
+        for sid, s in lks:
+            lk = s["lookup"]
+            if lk["status"] == "MATCH" and lk.get("mismatch"):
+                lines.append("- %s 서지 불일치 — %s / %s (DOI %s)" % (sid, _cell(s["ref"], 70), "; ".join(lk["mismatch"]), lk["doi"]))
+            elif lk["status"] != "MATCH":
+                lines.append("- %s %s — %s" % (sid, {"CANDIDATE": "후보만", "NO_MATCH": "못 찾음", "ERROR": "조회 실패"}[lk["status"]],
+                                                _cell(s["ref"], 90)))
     return "\n".join(lines) + "\n"
 
 
@@ -1358,7 +2014,132 @@ def selftest():
     led = extract("- 링크 14개를 대조했습니다. 오류는 2건이었습니다. → [기록](https://ex.org/r)\n")
     ok(len(led["claims"]) == 2 and all(c["sources"] for c in led["claims"]), "같은 줄 끝의 근거 링크를 앞 문장에도")
 
-    total = 54
+    # 철회·서지 조회 (v1.4) — 가상 레코드로, 네트워크 없이
+    rw = {"title": ["RETRACTED: A study"], "updated-by": [
+        {"type": "correction", "DOI": "10.1/c", "updated": {"date-parts": [[2004, 3, 6]]}},
+        {"type": "retraction", "DOI": "10.1/r", "updated": {"date-parts": [[2010, 2, 6]]}, "source": "retraction-watch"}]}
+    r = crossref_retraction(rw)
+    ok(r["status"] == "retracted" and any(n["date"] == "2010-02-06" for n in r["notices"]), "철회 공지가 정정보다 우선")
+    ok(crossref_retraction({"title": ["A"], "updated-by": [{"type": "Expression of Concern"}]})["status"] == "concern",
+       "우려 표명 인식(표기 변형)")
+    ok(crossref_retraction({"title": ["WITHDRAWN: B"]})["status"] == "retracted", "제목의 철회 표시만 있어도 철회")
+    ok(crossref_retraction({"title": ["C"]})["status"] == "none", "갱신 공지 없으면 none")
+    ref = "가나다·라마바 (2023). 지역혁신 거점의 사회적 교환 요인 연구. 가상정책학회보, 32(4), 315-347."
+    it = {"DOI": "10.9999/x.2023.32.4.11", "title": ["A Study on Social Exchange"],
+          "original-title": ["지역혁신 거점의 사회적 교환 요인 연구"], "container-title": ["Virtual Policy Review"],
+          "issued": {"date-parts": [[2023, 12, 31]]}, "volume": "32", "issue": "4"}
+    other = {"DOI": "10.9999/y", "title": ["지역혁신 정책의 평가"], "issued": {"date-parts": [[2020]]}}
+    res = lookup_ref(ref, items=[other, it])
+    ok(res["status"] == "MATCH" and res["doi"] == "10.9999/x.2023.32.4.11" and not res["mismatch"],
+       "한글 원제목으로 서지 일치, 연도·권호 일치")
+    res = lookup_ref(ref.replace("(2023)", "(2022)").replace("32(4)", "31(4)"), items=[it])
+    ok(any(m.startswith("연도") for m in res["mismatch"]) and any(m.startswith("권") for m in res["mismatch"]),
+       "연도·권 오기를 서지 불일치로")
+    ok(lookup_ref(ref, items=[other])["status"] == "NO_MATCH", "제목이 다른 후보는 일치로 보지 않음")
+    ok(title_match("홍길동 (2021). 혁신정책: 이론과 실제. 가상출판.", ["혁신정책 - 이론과 실제 -"]) >= 0.9,
+       "부제 구분 기호가 달라도 일치")
+    led = _case_ledger()
+    led["sources"]["S05"] = {"kind": "doi", "ref": "10.1/x", "tier": 2, "access_status": "METADATA_ONLY",
+                             "meta": {"retraction": {"status": "retracted", "notices": []}}}
+    led["claims"] = [_claim("C1", "VERIFIED", [dict(good, source="S05", scope="bibliographic")], sources=("S05",))]
+    ok(any("철회" in m for _, _, m in must(led)), "철회된 문헌을 근거로 쓰면 [필수]")
+    led["claims"] = []
+    ok(not must(led) and any(lv == "권고" and "철회" in m for lv, _, m in check_ledger(led)),
+       "근거로 쓰지 않은 철회 문헌은 [권고]")
+    led["sources"]["S06"] = {"kind": "bib", "ref": ref, "tier": None, "access_status": "METADATA_ONLY",
+                             "lookup": {"status": "MATCH", "doi": "10.9999/x", "mismatch": ["연도: 참고문헌 2022 ↔ 서지 2023"]}}
+    ok(any(lv == "권고" and "서지가 Crossref와 다름" in m for lv, _, m in check_ledger(led)), "서지 불일치는 [권고]")
+    led = extract("효과가 컸다(가나다, 2023).\n\n## 참고문헌\n- %s\n- 나라 (2020). 다른 보고서. 가상연구원.\n" % ref)
+    _register_uncited(led)
+    ok(sum(1 for s in led["sources"].values() if s["kind"] == "bib") == 2 and
+       any(s.get("uncited") for s in led["sources"].values()), "부르지 않은 참고문헌도 조회 대상으로")
+
+    ok(cites_of("원문 https://doi.org/10.1016/S0140-6736(97)11096-0 참고") == [("doi", "10.1016/S0140-6736(97)11096-0")],
+       "doi.org 주소는 DOI로, 괄호 든 DOI는 끝까지")
+    ok(cites_of("[보고서](https://ex.org/a)를 보라") == [("url", "https://ex.org/a")], "마크다운 링크 닫는 괄호는 주소가 아님")
+
+    book = "Kingdon, J. W. (1995). *Agendas, alternatives, and public policies* (2nd ed.). HarperCollins."
+    review = {"DOI": "10.9/rev", "title": ["Agendas, Alternatives, and Public Policies"], "author": [{"family": "Smith", "given": "A"}],
+              "issued": {"date-parts": [[1985]]}}
+    ok(lookup_ref(book, items=[review])["status"] == "CANDIDATE", "제목만 같고 첫 저자가 다르면(서평) 일치로 보지 않음")
+    ok(_ref_first_author(ref) == "가나다" and _ref_first_author(book) == "Kingdon", "참고문헌 첫 저자 뽑기")
+    it2 = dict(it, author=[{"family": "가", "given": "나다"}])
+    ok(lookup_ref(ref, items=[it2])["status"] == "MATCH" and lookup_ref(ref, items=[it2])["author_match"] is True,
+       "한글 성·이름이 나뉜 서지도 저자 일치")
+
+    review2 = dict(review, author=[], type="journal-article", issued={"date-parts": [[1995]]})
+    ok(lookup_ref(book, items=[review2])["status"] == "CANDIDATE", "단행본 인용이 저자 없는 학술지 글(서평)과 맞으면 후보로")
+    ok(_ref_vol_issue("강가상. (2011). 제목. 「철학연구」, 93, 175-199.") == ("93", ""), "「학술지」, 권, 쪽 형식의 권 번호")
+
+    ok(_journal_like("Merton, R. K. (1968). The Matthew effect in science. *Science*, 159(3810), 56-63.")
+       and _journal_like("Wahls, W. P. (2018). Title. *eLife*, 7, e34965.") and not _journal_like(book),
+       "학술지 인용(4자리 호·논문 번호)과 단행본 가르기")
+
+    # ---- 1.5.0: 받은 파일 점검 · 확신도 상한 (paper-trail·deepdive 착안)
+    ok(title_words("Evaluating Verifiability in Generative Search Engines") == ["evaluating", "verifiability", "generative", "search", "engines"],
+       "영문 제목 고유어(5자 이상, 흔한 낱말 제외)")
+    ok(title_words("인공지능 기본법의 쟁점에 관한 연구") == ["인공지능", "기본법", "쟁점"], "한글 제목 고유어(조사 떼고 흔한 낱말 제외)")
+    ok(identity_check("Evaluating Verifiability in Generative Search Engines Nelson F. Liu", "Evaluating Verifiability in Generative Search Engines")[0] is True,
+       "제목이 앞쪽에 있으면 같은 문헌")
+    ok(identity_check("DeepTRACE: Auditing Deep Research AI Systems", "Evaluating Verifiability in Generative Search Engines")[0] is False,
+       "다른 논문 PDF는 다른 문헌으로 판정")
+    ok(identity_check("... doi:10.1000/xyz ...", "전혀 다른 제목", doi="10.1000/XYZ")[0] is True, "DOI가 앞쪽에 있으면 제목과 무관하게 같은 문헌")
+    ok(identity_check("본문", "")[0] is None, "기대 제목이 없으면 판정하지 않음")
+    import tempfile
+    with tempfile.TemporaryDirectory() as td:
+        lp = os.path.join(td, "l.json")
+        led0 = _case_ledger()
+        led0["sources"]["S05"] = {"kind": "url", "ref": "https://www.gao.gov/a.pdf", "tier": 1, "access_status": "BLOCKED"}
+        led0["sources"]["S06"] = {"kind": "url", "ref": "https://ex.org/rep", "tier": 2, "access_status": "NOT_CHECKED",
+                                  "title": "Generative Search Engines Verifiability"}
+        dump(led0, lp)
+        deny = os.path.join(td, "deny.html")
+        with open(deny, "w") as f:
+            f.write("<html><head><title>Access Denied</title></head><body><h1>Access Denied</h1>You don't have permission</body></html>")
+        rc = main(["attach", lp, "S05", deny, "--via", "curl"])
+        ok(rc == 1 and load(lp)["sources"]["S05"]["access_status"] == "BLOCKED", "접근 거부 페이지를 붙이면 원문으로 올리지 않음")
+        good = os.path.join(td, "page.txt")
+        with open(good, "w") as f:
+            f.write("Evaluating verifiability in generative search engines. " * 20)
+        rc = main(["attach", lp, "S06", good, "--via", "browser"])
+        l1 = load(lp)
+        ok(rc == 0 and l1["sources"]["S06"]["access_status"] == "FULL_TEXT" and l1["sources"]["S06"]["identity"]["ok"] is True
+           and l1["sources"]["S06"].get("content_sha256"), "본문 사본을 붙이면 FULL_TEXT·대조·해시")
+        with open(good, "w") as f:
+            f.write("Evaluating verifiability in generative search engines, revised. " * 20)
+        main(["attach", lp, "S06", good, "--via", "browser"])
+        ok(load(lp)["sources"]["S06"].get("changed_at"), "같은 출처의 원문이 바뀌면 changed_at 기록")
+        wrong = os.path.join(td, "wrong.txt")
+        with open(wrong, "w") as f:
+            f.write("Quarterly bulletin on agricultural prices and harvest outlook. " * 20)
+        main(["attach", lp, "S06", wrong])
+        l2 = load(lp)
+        l2["claims"] = [_claim("C9", "VERIFIED", [{"atom": "C9.a1", "source": "S06", "evidence_status": "SUPPORTS",
+                                                    "excerpt": "Quarterly bulletin", "locator": "p.1"}], sources=("S06",))]
+        iss = check_ledger(l2, base=td)
+        ok(any(lv == "필수" and sid == "S06" and "그 문헌이 아닐" in m for lv, sid, m in iss), "다른 문헌으로 의심되는 출처를 근거로 쓰면 [필수]")
+    ledc = _case_ledger()
+    ledc["sources"].update({
+        "T1": {"kind": "url", "ref": "https://kosis.kr/a", "tier": 1, "access_status": "FULL_TEXT"},
+        "T2a": {"kind": "url", "ref": "https://news.example.com/x", "tier": 3, "access_status": "FULL_TEXT"},
+        "T2b": {"kind": "url", "ref": "https://www.news.example.com/x/", "tier": 3, "access_status": "FULL_TEXT"},
+        "T3": {"kind": "url", "ref": "https://other.example.org/y", "tier": 3, "access_status": "FULL_TEXT"},
+        "T4": {"kind": "url", "ref": "https://blog.example.net/z", "tier": 3, "access_status": "FULL_TEXT"}})
+    sup = lambda sid, ex="과기정통부는 2025년 관련 사업 예산이 5,000억 원으로 확정되었다고 13일 밝혔다": {"atom": "C1.a1", "source": sid, "evidence_status": "SUPPORTS",
+                                                                     "excerpt": ex, "locator": "p.1"}
+    ok(confidence_ceiling(ledc, _claim("C1", "VERIFIED", [sup("T1")]))[0] == "medium", "1차 자료 한 건이면 상한 보통")
+    ok(confidence_ceiling(ledc, _claim("C1", "VERIFIED", [sup("T1"), sup("T3", "올해 예산 규모는 5,000억 원이다")]))[0] == "high",
+       "1차 자료에 독립 근거가 하나 더 있으면 상한 높음")
+    ok(confidence_ceiling(ledc, _claim("C1", "VERIFIED", [sup("T2a"), sup("T2b", "다른 문장 5,000억 원")]))[0] == "low",
+       "같은 주소(www·끝 슬래시 차이)는 근거 하나로 셈")
+    ok(confidence_ceiling(ledc, _claim("C1", "VERIFIED", [sup("T3"), sup("T4")]))[0] == "low",
+       "거의 같은 발췌(받아쓰기)는 근거 하나로 셈")
+    c_hi = _claim("C1", "VERIFIED", [sup("T3")], sources=("T3",), confidence="high")
+    ok(any(lv == "필수" and "상한" in m for lv, _, m in check_ledger(dict(ledc, claims=[c_hi]))), "적은 확신도가 상한을 넘으면 [필수]")
+    ok(confidence_ceiling(ledc, _claim("C1", "VERIFIED", [sup("T1")], atoms=[{"id": "C1.a1", "type": "quote", "text": "x"}]))[0] == "high",
+       "문서가 그렇게 말했다는 주장은 1차 자료 하나로 높음")
+
+    total = 75 + 18
     print("자체 점검 %d/%d 통과" % (total - len(fails), total))
     for f in fails:
         print("  실패: " + f)
@@ -1381,6 +2162,23 @@ def main(argv=None):
     pr.add_argument("--only", help="S01,S03처럼 일부만")
     pr.add_argument("--force", action="store_true", help="이미 확인한 것도 다시")
     pr.add_argument("--no-wayback", action="store_true", help="막힌 링크의 웨이백 보관본 조회를 끔")
+    at = sub.add_parser("attach", help="따로 받은 파일(PDF·브라우저 본문 사본)을 출처에 붙이기 — 봇 화면·빈 본문·다른 문헌이면 거부")
+    at.add_argument("ledger")
+    at.add_argument("sid")
+    at.add_argument("file")
+    at.add_argument("--via", default="manual", help="어떻게 받았나: curl·browser·user 등")
+    at.add_argument("--title", help="기대 제목(첫 쪽 대조용)")
+    at.add_argument("--author", help="기대 저자")
+    at.add_argument("--doi", help="기대 DOI")
+    at.add_argument("--accept-identity", help="대조가 실패했지만 사람이 같은 문헌으로 확인한 사유")
+    at.add_argument("--save-dir")
+    lk = sub.add_parser("lookup", help="DOI 없는 참고문헌을 Crossref 서지 검색으로 확인(연도·권호·철회)")
+    lk.add_argument("ledger")
+    lk.add_argument("--timeout", type=int, default=20)
+    lk.add_argument("--only", help="S01,S03처럼 일부만")
+    lk.add_argument("--force", action="store_true", help="이미 조회한 것도 다시")
+    lk.add_argument("--cited-only", action="store_true", help="본문에서 부른 문헌만 (기본: 참고문헌 목록 전체)")
+    lk.add_argument("--sleep", type=float, default=0.5, help="조회 사이 간격(초)")
     c = sub.add_parser("check", help="판정 규칙 준수 점검 (exit 1 = [필수])")
     c.add_argument("ledger")
     c.add_argument("--final", action="store_true", help="미판정도 [필수]로")
@@ -1405,7 +2203,7 @@ def main(argv=None):
         p.print_help()
         return 2
     try:
-        return {"extract": cmd_extract, "probe": cmd_probe, "check": cmd_check, "report": cmd_report,
+        return {"extract": cmd_extract, "probe": cmd_probe, "lookup": cmd_lookup, "attach": cmd_attach, "check": cmd_check, "report": cmd_report,
                 "diff": cmd_diff, "sample": cmd_sample, "selftest": lambda _: selftest()}[a.cmd](a)
     except (OSError, ValueError, KeyError, zipfile.BadZipFile, ET.ParseError) as ex:
         print("입력 오류: %s: %s" % (type(ex).__name__, ex), file=sys.stderr)

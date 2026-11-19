@@ -96,7 +96,7 @@ class TestExtract(unittest.TestCase):
                 z.writestr("word/footnotes.xml", fn)
             led = fv.extract(fv.read_doc(p))
         kinds = {led["sources"][s]["kind"] for s in led["claims"][0]["sources"]}
-        self.assertIn("url", kinds)
+        self.assertIn("doi", kinds)                   # v1.4: doi.org 주소는 DOI로 등록(철회 확인 대상)
 
 
 class TestCheckAndReport(unittest.TestCase):
